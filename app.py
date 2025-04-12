@@ -22,11 +22,11 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 MODEL = "gpt-4o"  # or "o3-mini"
 
 # Database configuration
-app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///transcripts.db"
+app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///app.db"
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 db.init_app(app)
 
-# Create database tables
+# Initialize database
 with app.app_context():
     db.create_all()
 
@@ -99,7 +99,9 @@ def index():
                 if transcript_record:
                     transcript_record.summary = summary
                     db.session.commit()
-    return render_template_string(TEMPLATE, summary=summary, error=error)
+    # Get all processed videos
+    processed_videos = Transcript.query.order_by(Transcript.created_at.desc()).all()
+    return render_template_string(TEMPLATE, summary=summary, error=error, processed_videos=processed_videos)
 
 
 # ==== Template ====
@@ -113,6 +115,26 @@ TEMPLATE = """
         body { font-family: sans-serif; max-width: 700px; margin: 2rem auto; padding: 1rem; }
         textarea { width: 100%; height: 200px; margin-top: 1rem; }
         .error { color: red; }
+        .video-list { margin-top: 2rem; }
+        .video-item {
+            padding: 1rem;
+            margin-bottom: 1rem;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        .video-item h3 { margin-top: 0; }
+        .video-item .timestamp {
+            color: #666;
+            font-size: 0.9em;
+            margin-bottom: 0.5rem;
+        }
+        .video-link {
+            color: #0066cc;
+            text-decoration: none;
+        }
+        .video-link:hover {
+            text-decoration: underline;
+        }
     </style>
 </head>
 <body>
@@ -128,6 +150,32 @@ TEMPLATE = """
         <h2>Summary:</h2>
         <textarea readonly>{{ summary }}</textarea>
     {% endif %}
+
+    <div class="video-list">
+        <h2>Processed Videos</h2>
+        {% if processed_videos %}
+            {% for video in processed_videos %}
+                <div class="video-item">
+                    <h3>
+                        <a href="https://youtube.com/watch?v={{ video.video_id }}" class="video-link" target="_blank">
+                            Video ID: {{ video.video_id }}
+                        </a>
+                    </h3>
+                    <div class="timestamp">
+                        Processed: {{ video.created_at.strftime('%Y-%m-%d %H:%M:%S') }}
+                    </div>
+                    {% if video.summary %}
+                        <div class="summary">
+                            <strong>Summary:</strong>
+                            <p>{{ video.summary }}</p>
+                        </div>
+                    {% endif %}
+                </div>
+            {% endfor %}
+        {% else %}
+            <p>No videos have been processed yet.</p>
+        {% endif %}
+    </div>
 </body>
 </html>
 """
