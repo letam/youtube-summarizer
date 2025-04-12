@@ -34,7 +34,8 @@ with app.app_context():
 
 
 def extract_video_id(url):
-    match = re.search(r"(?:v=|youtu\.be/)([a-zA-Z0-9_-]{11})", url)
+    # Match regular YouTube URLs (v=VIDEO_ID)
+    match = re.search(r"(?:v=|youtu\.be/|youtube\.com/shorts/)([a-zA-Z0-9_-]{11})", url)
     return match.group(1) if match else None
 
 
