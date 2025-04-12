@@ -11,6 +11,10 @@ venv/
 env/
 ENV/
 
+# Database
+*.db
+*.sqlite3
+
 # IDE
 .vscode/
 .idea/

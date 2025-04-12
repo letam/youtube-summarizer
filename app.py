@@ -4,6 +4,7 @@ import openai
 import re
 from dotenv import load_dotenv
 import os
+from models import db, Transcript
 
 app = Flask(__name__)
 
@@ -14,6 +15,15 @@ load_dotenv()
 openai.api_key = os.getenv("OPENAI_API_KEY")
 MODEL = "gpt-4o"  # or "o3-mini"
 
+# Database configuration
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///transcripts.db'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+db.init_app(app)
+
+# Create database tables
+with app.app_context():
+    db.create_all()
+
 # ==== Helper Functions ====
 
 def extract_video_id(url):
@@ -22,8 +32,20 @@ def extract_video_id(url):
 
 def fetch_transcript(video_id):
     try:
+        # Check if transcript exists in database
+        existing_transcript = Transcript.query.filter_by(video_id=video_id).first()
+        if existing_transcript:
+            return existing_transcript.transcript_text
+
+        # If not in database, fetch from YouTube
         transcript = YouTubeTranscriptApi.get_transcript(video_id)
         full_text = " ".join([t["text"] for t in transcript])
+
+        # Save to database
+        new_transcript = Transcript(video_id=video_id, transcript_text=full_text)
+        db.session.add(new_transcript)
+        db.session.commit()
+
         return full_text
     except (TranscriptsDisabled, NoTranscriptFound):
         return None
@@ -56,6 +78,11 @@ def index():
                 error = "Transcript not available for this video."
             else:
                 summary = summarize_transcript(transcript)
+                # Update summary in database
+                transcript_record = Transcript.query.filter_by(video_id=video_id).first()
+                if transcript_record:
+                    transcript_record.summary = summary
+                    db.session.commit()
     return render_template_string(TEMPLATE, summary=summary, error=error)
 
 # ==== Template ====
