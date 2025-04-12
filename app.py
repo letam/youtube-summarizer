@@ -1,6 +1,7 @@
 from flask import Flask, request, render_template_string
 from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
-import openai
+from openai import OpenAI
+
 import re
 from dotenv import load_dotenv
 import os
@@ -12,7 +13,7 @@ app = Flask(__name__)
 load_dotenv()
 
 # ==== Configuration ====
-openai.api_key = os.getenv("OPENAI_API_KEY")
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 MODEL = "gpt-4o"  # or "o3-mini"
 
 # Database configuration
@@ -51,16 +52,14 @@ def fetch_transcript(video_id):
         return None
 
 def summarize_transcript(text):
-    response = openai.ChatCompletion.create(
-        model=MODEL,
-        messages=[
-            {"role": "system", "content": "Summarize this YouTube transcript clearly and concisely."},
-            {"role": "user", "content": text}
-        ],
-        temperature=0.5,
-        max_tokens=500
-    )
-    return response["choices"][0]["message"]["content"]
+    response = client.chat.completions.create(model=MODEL,
+    messages=[
+        {"role": "system", "content": "Summarize this YouTube transcript clearly and concisely."},
+        {"role": "user", "content": text}
+    ],
+    temperature=0.5,
+    max_tokens=500)
+    return response.choices[0].message.content
 
 # ==== Routes ====
 
