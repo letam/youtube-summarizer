@@ -1,31 +1,36 @@
+#!/usr/bin/env -S just --justfile
+
+# Virtual environment path alias
+venv := "./venv/bin"
+
 # List available commands
 default:
     @just --list
 
 # Install production dependencies only
 install:
-    pip install -r requirements.txt
+    {{venv}}/pip install -r requirements.txt
 
 # Install both production and development dependencies
 install-dev:
-    pip install -r requirements-dev.txt
+    {{venv}}/pip install -r requirements-dev.txt
 
 # Run the Flask development server
 run:
-    python app.py
+    {{venv}}/python app.py
 
 # Format code using Ruff
 fmt:
-    ruff format .
-    ruff check . --fix
+    {{venv}}/ruff format .
+    {{venv}}/ruff check . --fix
 
 # Check code without fixing
 check:
-    ruff check .
+    {{venv}}/ruff check .
 
 # Run tests
 test:
-    pytest
+    {{venv}}/pytest
 
 # Clean up Python cache files and temporary files
 clean:
@@ -41,8 +46,8 @@ clean:
 
 # Update requirements.txt with current production dependencies
 freeze:
-    pip freeze | grep -v -f <(pip freeze -r requirements-dev.txt) > requirements.txt
+    {{venv}}/pip freeze | grep -v -f <({{venv}}/pip freeze -r requirements-dev.txt) > requirements.txt
 
 # Update requirements-dev.txt with current development dependencies
 freeze-dev:
-    pip freeze > requirements-dev.txt
+    {{venv}}/pip freeze > requirements-dev.txt
