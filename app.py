@@ -2,11 +2,16 @@ from flask import Flask, request, render_template_string
 from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
 import openai
 import re
+from dotenv import load_dotenv
+import os
 
 app = Flask(__name__)
 
+# Load environment variables
+load_dotenv()
+
 # ==== Configuration ====
-openai.api_key = "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"  # Replace with your OpenAI key
+openai.api_key = os.getenv("OPENAI_API_KEY")
 MODEL = "gpt-4o"  # or "o3-mini"
 
 # ==== Helper Functions ====
