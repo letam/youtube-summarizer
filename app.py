@@ -1,11 +1,16 @@
-from flask import Flask, request, render_template_string
-from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
-from openai import OpenAI
-
-import re
-from dotenv import load_dotenv
 import os
-from models import db, Transcript
+import re
+
+from dotenv import load_dotenv
+from flask import Flask, render_template_string, request
+from openai import OpenAI
+from youtube_transcript_api import (
+    NoTranscriptFound,
+    TranscriptsDisabled,
+    YouTubeTranscriptApi,
+)
+
+from models import Transcript, db
 
 app = Flask(__name__)
 
@@ -17,8 +22,8 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 MODEL = "gpt-4o"  # or "o3-mini"
 
 # Database configuration
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///transcripts.db'
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///transcripts.db"
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 db.init_app(app)
 
 # Create database tables
@@ -27,9 +32,11 @@ with app.app_context():
 
 # ==== Helper Functions ====
 
+
 def extract_video_id(url):
     match = re.search(r"(?:v=|youtu\.be/)([a-zA-Z0-9_-]{11})", url)
     return match.group(1) if match else None
+
 
 def fetch_transcript(video_id):
     try:
@@ -51,19 +58,25 @@ def fetch_transcript(video_id):
     except (TranscriptsDisabled, NoTranscriptFound):
         return None
 
+
 def summarize_transcript(text):
     response = client.chat.completions.create(
         model=MODEL,
         messages=[
-            {"role": "system", "content": "Summarize this YouTube transcript clearly and concisely."},
-            {"role": "user", "content": text}
+            {
+                "role": "system",
+                "content": "Summarize this YouTube transcript clearly and concisely.",
+            },
+            {"role": "user", "content": text},
         ],
         temperature=0.5,
-        max_tokens=500
+        max_tokens=500,
     )
     return response.choices[0].message.content
 
+
 # ==== Routes ====
+
 
 @app.route("/", methods=["GET", "POST"])
 def index():
@@ -80,11 +93,14 @@ def index():
             else:
                 summary = summarize_transcript(transcript)
                 # Update summary in database
-                transcript_record = Transcript.query.filter_by(video_id=video_id).first()
+                transcript_record = Transcript.query.filter_by(
+                    video_id=video_id
+                ).first()
                 if transcript_record:
                     transcript_record.summary = summary
                     db.session.commit()
     return render_template_string(TEMPLATE, summary=summary, error=error)
+
 
 # ==== Template ====
 
@@ -120,4 +136,3 @@ TEMPLATE = """
 
 if __name__ == "__main__":
     app.run(debug=True)
-
