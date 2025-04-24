@@ -66,7 +66,7 @@ def summarize_transcript(text):
         instructions="Summarize this YouTube transcript clearly and concisely.",
         input=text,
         temperature=0.5,
-        max_output_tokens=500,
+        max_output_tokens=1000,
     )
     return response.output_text
 
