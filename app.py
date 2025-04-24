@@ -61,19 +61,14 @@ def fetch_transcript(video_id):
 
 
 def summarize_transcript(text):
-    response = client.chat.completions.create(
+    response = client.responses.create(
         model=MODEL,
-        messages=[
-            {
-                "role": "system",
-                "content": "Summarize this YouTube transcript clearly and concisely.",
-            },
-            {"role": "user", "content": text},
-        ],
+        instructions="Summarize this YouTube transcript clearly and concisely.",
+        input=text,
         temperature=0.5,
-        max_tokens=500,
+        max_output_tokens=500,
     )
-    return response.choices[0].message.content
+    return response.output_text
 
 
 # ==== Routes ====
