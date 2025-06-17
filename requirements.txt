@@ -4,4 +4,4 @@ python-dotenv==1.0.1
 
 openai==1.72.0
 
-youtube-transcript-api==0.6.2
+youtube-transcript-api==1.1.0
