@@ -20,6 +20,7 @@ load_dotenv()
 # ==== Configuration ====
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 MODEL = "gpt-4o"  # or "o3-mini"
+MAX_TOKENS_PER_CHUNK = 4000  # Conservative estimate to stay within rate limits
 
 # Database configuration
 app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///app.db"
@@ -60,15 +61,63 @@ def fetch_transcript(video_id):
         return None
 
 
+def chunk_transcript(text, max_tokens=MAX_TOKENS_PER_CHUNK):
+    """Split transcript into smaller chunks based on approximate token count."""
+    # Rough estimate: 1 token ≈ 4 characters
+    chunk_size = max_tokens * 4
+    chunks = []
+
+    # Split by sentences to avoid cutting mid-sentence
+    sentences = text.split('. ')
+    current_chunk = []
+    current_size = 0
+
+    for sentence in sentences:
+        sentence = sentence.strip() + '. '
+        sentence_size = len(sentence)
+
+        if current_size + sentence_size > chunk_size and current_chunk:
+            chunks.append(' '.join(current_chunk))
+            current_chunk = [sentence]
+            current_size = sentence_size
+        else:
+            current_chunk.append(sentence)
+            current_size += sentence_size
+
+    if current_chunk:
+        chunks.append(' '.join(current_chunk))
+
+    return chunks
+
+
 def summarize_transcript(text):
-    response = client.responses.create(
-        model=MODEL,
-        instructions="Summarize this YouTube transcript clearly and concisely.",
-        input=text,
-        temperature=0.5,
-        max_output_tokens=1000,
-    )
-    return response.output_text
+    # Split text into chunks
+    chunks = chunk_transcript(text)
+    summaries = []
+
+    for chunk in chunks:
+        response = client.responses.create(
+            model=MODEL,
+            instructions="Summarize this portion of a YouTube transcript clearly and concisely.",
+            input=chunk,
+            temperature=0.5,
+            max_output_tokens=500,  # Reduced to stay within limits
+        )
+        summaries.append(response.output_text)
+
+    # If we have multiple chunks, create a final summary
+    if len(summaries) > 1:
+        combined_summary = " ".join(summaries)
+        response = client.responses.create(
+            model=MODEL,
+            instructions="Create a coherent final summary from these partial summaries.",
+            input=combined_summary,
+            temperature=0.5,
+            max_output_tokens=1000,
+        )
+        return response.output_text
+
+    return summaries[0]
 
 
 # ==== Routes ====
