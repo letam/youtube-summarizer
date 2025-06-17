@@ -11,7 +11,7 @@ from youtube_transcript_api import (
     YouTubeTranscriptApi,
 )
 
-from models import Transcript, db
+from models import Transcript, db, Summary
 
 app = Flask(__name__)
 
@@ -143,29 +143,42 @@ def summarize_transcript(text):
     chunks = chunk_transcript(text)
     summaries = []
 
-    for chunk in chunks:
-        response = client.responses.create(
-            model=MODEL,
-            instructions="Summarize this portion of a YouTube transcript clearly and concisely.",
-            input=chunk,
-            temperature=0.5,
-            max_output_tokens=500,  # Reduced to stay within limits
-        )
-        summaries.append(response.output_text)
+    # Generate different types of summaries
+    summary_types = {
+        'concise': "Summarize this portion of a YouTube transcript in a concise manner, focusing on the main points.",
+        'detailed': "Provide a detailed summary of this portion of a YouTube transcript, including important details and context.",
+        'key_points': "Extract the key points and main takeaways from this portion of a YouTube transcript."
+    }
 
-    # If we have multiple chunks, create a final summary
-    if len(summaries) > 1:
-        combined_summary = " ".join(summaries)
-        response = client.responses.create(
-            model=MODEL,
-            instructions="Create a coherent final summary from these partial summaries.",
-            input=combined_summary,
-            temperature=0.5,
-            max_output_tokens=1000,
-        )
-        return response.output_text
+    all_summaries = {}
 
-    return summaries[0]
+    for summary_type, instruction in summary_types.items():
+        type_summaries = []
+        for chunk in chunks:
+            response = client.responses.create(
+                model=MODEL,
+                instructions=instruction,
+                input=chunk,
+                temperature=0.5,
+                max_output_tokens=500,
+            )
+            type_summaries.append(response.output_text)
+
+        # If we have multiple chunks, create a final summary
+        if len(type_summaries) > 1:
+            combined_summary = " ".join(type_summaries)
+            response = client.responses.create(
+                model=MODEL,
+                instructions=f"Create a coherent final {summary_type} summary from these partial summaries.",
+                input=combined_summary,
+                temperature=0.5,
+                max_output_tokens=1000,
+            )
+            all_summaries[summary_type] = response.output_text
+        else:
+            all_summaries[summary_type] = type_summaries[0]
+
+    return all_summaries
 
 
 # ==== Routes ====
@@ -173,7 +186,8 @@ def summarize_transcript(text):
 
 @app.route("/", methods=["GET", "POST"])
 def index():
-    summary = error = ""
+    summaries = {}
+    error = ""
     if request.method == "POST":
         url = request.form["url"]
         video_id = extract_video_id(url)
@@ -184,17 +198,25 @@ def index():
             if not transcript:
                 error = "Transcript not available for this video."
             else:
-                summary = summarize_transcript(transcript)
-                # Update summary in database
-                transcript_record = Transcript.query.filter_by(
-                    video_id=video_id
-                ).first()
+                summaries = summarize_transcript(transcript)
+                # Update summaries in database
+                transcript_record = Transcript.query.filter_by(video_id=video_id).first()
                 if transcript_record:
-                    transcript_record.summary = summary
+                    # Delete existing summaries
+                    Summary.query.filter_by(transcript_id=transcript_record.id).delete()
+                    # Add new summaries
+                    for summary_type, content in summaries.items():
+                        new_summary = Summary(
+                            transcript_id=transcript_record.id,
+                            summary_type=summary_type,
+                            content=content
+                        )
+                        db.session.add(new_summary)
                     db.session.commit()
+
     # Get all processed videos
     processed_videos = Transcript.query.order_by(Transcript.created_at.desc()).all()
-    return render_template_string(TEMPLATE, summary=summary, error=error, processed_videos=processed_videos)
+    return render_template_string(TEMPLATE, summaries=summaries, error=error, processed_videos=processed_videos)
 
 
 # ==== Template ====
@@ -228,6 +250,17 @@ TEMPLATE = """
         .video-link:hover {
             text-decoration: underline;
         }
+        .summary-section {
+            margin-top: 1rem;
+            padding: 1rem;
+            background: #f5f5f5;
+            border-radius: 4px;
+        }
+        .summary-type {
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 0.5rem;
+        }
     </style>
 </head>
 <body>
@@ -239,9 +272,14 @@ TEMPLATE = """
     {% if error %}
         <p class="error">{{ error }}</p>
     {% endif %}
-    {% if summary %}
-        <h2>Summary:</h2>
-        <textarea readonly>{{ summary }}</textarea>
+    {% if summaries %}
+        <h2>Summaries:</h2>
+        {% for summary_type, content in summaries.items() %}
+            <div class="summary-section">
+                <div class="summary-type">{{ summary_type|title }} Summary:</div>
+                <textarea readonly>{{ content }}</textarea>
+            </div>
+        {% endfor %}
     {% endif %}
 
     <div class="video-list">
@@ -257,11 +295,13 @@ TEMPLATE = """
                     <div class="timestamp">
                         Processed: {{ video.created_at.strftime('%Y-%m-%d %H:%M:%S') }}
                     </div>
-                    {% if video.summary %}
-                        <div class="summary">
-                            <strong>Summary:</strong>
-                            <p>{{ video.summary }}</p>
-                        </div>
+                    {% if video.summaries %}
+                        {% for summary in video.summaries %}
+                            <div class="summary-section">
+                                <div class="summary-type">{{ summary.summary_type|title }} Summary:</div>
+                                <p>{{ summary.content }}</p>
+                            </div>
+                        {% endfor %}
                     {% endif %}
                 </div>
             {% endfor %}
