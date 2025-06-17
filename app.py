@@ -1,5 +1,6 @@
 import os
 import re
+from typing import List
 
 from dotenv import load_dotenv
 from flask import Flask, render_template_string, request
@@ -21,6 +22,7 @@ load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 MODEL = "gpt-4o"  # or "o3-mini"
 MAX_TOKENS_PER_CHUNK = 4000  # Conservative estimate to stay within rate limits
+CHUNK_OVERLAP = 200  # Number of tokens to overlap between chunks
 
 # Database configuration
 app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///app.db"
@@ -61,31 +63,77 @@ def fetch_transcript(video_id):
         return None
 
 
-def chunk_transcript(text, max_tokens=MAX_TOKENS_PER_CHUNK):
-    """Split transcript into smaller chunks based on approximate token count."""
-    # Rough estimate: 1 token ≈ 4 characters
-    chunk_size = max_tokens * 4
+def estimate_tokens(text: str) -> int:
+    """Estimate the number of tokens in a text string.
+    This is a rough estimation based on OpenAI's tokenizer behavior:
+    - ~4 chars per token for English text
+    - Special characters and numbers count differently
+    """
+    # Count words and special characters
+    words = len(text.split())
+    special_chars = len(re.findall(r'[^a-zA-Z0-9\s]', text))
+    numbers = len(re.findall(r'\d+', text))
+
+    # Weight different elements
+    return (words * 1.3) + (special_chars * 0.5) + (numbers * 0.5)
+
+
+def find_split_point(text: str, max_tokens: int) -> int:
+    """Find the best point to split text while respecting sentence boundaries."""
+    # First try to split on paragraph breaks
+    paragraphs = text.split('\n\n')
+    if len(paragraphs) > 1:
+        current_length = 0
+        for i, para in enumerate(paragraphs):
+            current_length += estimate_tokens(para)
+            if current_length > max_tokens:
+                return text.find('\n\n', text.find(paragraphs[i-1]))
+
+    # If no good paragraph break, try sentence breaks
+    sentences = re.split(r'(?<=[.!?])\s+', text)
+    current_length = 0
+    for i, sentence in enumerate(sentences):
+        current_length += estimate_tokens(sentence)
+        if current_length > max_tokens:
+            # Find the position of the last complete sentence
+            return text.find(sentence, text.find(sentences[i-1]))
+
+    return len(text)
+
+
+def chunk_transcript(text: str, max_tokens: int = MAX_TOKENS_PER_CHUNK) -> List[str]:
+    """Split transcript into smaller chunks based on token count while maintaining context.
+
+    Args:
+        text: The transcript text to split
+        max_tokens: Maximum tokens per chunk
+
+    Returns:
+        List of text chunks
+    """
     chunks = []
+    remaining_text = text
 
-    # Split by sentences to avoid cutting mid-sentence
-    sentences = text.split('. ')
-    current_chunk = []
-    current_size = 0
+    while remaining_text:
+        # Calculate the split point
+        split_point = find_split_point(remaining_text, max_tokens)
 
-    for sentence in sentences:
-        sentence = sentence.strip() + '. '
-        sentence_size = len(sentence)
+        # Extract the chunk
+        chunk = remaining_text[:split_point].strip()
+        if chunk:
+            chunks.append(chunk)
 
-        if current_size + sentence_size > chunk_size and current_chunk:
-            chunks.append(' '.join(current_chunk))
-            current_chunk = [sentence]
-            current_size = sentence_size
+        # Move the remaining text forward, including some overlap
+        if split_point < len(remaining_text):
+            # Find the last sentence in the current chunk
+            last_sentence = re.search(r'[^.!?]+[.!?]', chunk[::-1])
+            if last_sentence:
+                overlap_start = split_point - len(last_sentence.group(0))
+                remaining_text = remaining_text[overlap_start:]
+            else:
+                remaining_text = remaining_text[split_point:]
         else:
-            current_chunk.append(sentence)
-            current_size += sentence_size
-
-    if current_chunk:
-        chunks.append(' '.join(current_chunk))
+            break
 
     return chunks
 
