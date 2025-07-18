@@ -299,7 +299,7 @@ TEMPLATE = """
                         {% for summary in video.summaries %}
                             <div class="summary-section">
                                 <div class="summary-type">{{ summary.summary_type|title }} Summary:</div>
-                                <p>{{ summary.content }}</p>
+                                <p>{{ summary.content | replace('\n', '<br>') | safe }}</p>
                             </div>
                         {% endfor %}
                     {% endif %}
