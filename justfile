@@ -20,6 +20,10 @@ install-dev:
 run:
     {{venv}}/python app.py
 
+# Run the CLI application
+cli *args:
+    {{venv}}/python cli.py {{args}}
+
 # Format code using Ruff
 fmt:
     {{venv}}/ruff format .
