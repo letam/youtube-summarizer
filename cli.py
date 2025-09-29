@@ -50,6 +50,8 @@ def setup_database():
     with app.app_context():
         db.create_all()
 
+    return app
+
 
 def print_colored(text: str, color: str = "white") -> None:
     """Print colored text to terminal."""
@@ -97,29 +99,30 @@ def format_summary_output(summaries: dict, video_id: str) -> None:
 
 def list_processed_videos(limit: int = 10) -> None:
     """List previously processed videos."""
-    setup_database()
+    app = setup_database()
 
-    videos = Transcript.query.order_by(Transcript.created_at.desc()).limit(limit).all()
+    with app.app_context():
+        videos = Transcript.query.order_by(Transcript.created_at.desc()).limit(limit).all()
 
-    if not videos:
-        print_colored("No videos have been processed yet.", "yellow")
-        return
+        if not videos:
+            print_colored("No videos have been processed yet.", "yellow")
+            return
 
-    print_colored(f"\n{'='*50}", "cyan")
-    print_colored("RECENTLY PROCESSED VIDEOS", "bold")
-    print_colored(f"{'='*50}\n", "cyan")
+        print_colored(f"\n{'='*50}", "cyan")
+        print_colored("RECENTLY PROCESSED VIDEOS", "bold")
+        print_colored(f"{'='*50}\n", "cyan")
 
-    for i, video in enumerate(videos, 1):
-        print_colored(f"{i}. Video ID: {video.video_id}", "white")
-        print_colored(f"   Processed: {video.created_at.strftime('%Y-%m-%d %H:%M:%S')}", "yellow")
-        print_colored(f"   URL: https://youtube.com/watch?v={video.video_id}", "blue")
+        for i, video in enumerate(videos, 1):
+            print_colored(f"{i}. Video ID: {video.video_id}", "white")
+            print_colored(f"   Processed: {video.created_at.strftime('%Y-%m-%d %H:%M:%S')}", "yellow")
+            print_colored(f"   URL: https://youtube.com/watch?v={video.video_id}", "blue")
 
-        # Show summary types available
-        summary_types = [s.summary_type for s in video.summaries]
-        if summary_types:
-            print_colored(f"   Summaries: {', '.join(summary_types)}", "green")
+            # Show summary types available
+            summary_types = [s.summary_type for s in video.summaries]
+            if summary_types:
+                print_colored(f"   Summaries: {', '.join(summary_types)}", "green")
 
-        print()
+            print()
 
 
 def main():
@@ -195,12 +198,13 @@ Examples:
         print_colored(f"✅ Video ID extracted: {video_id}", "green")
 
     # Setup database and fetch transcript
-    setup_database()
+    app = setup_database()
 
     if args.verbose:
         print_colored("🔍 Fetching transcript...", "yellow")
 
-    transcript = fetch_transcript(video_id)
+    with app.app_context():
+        transcript = fetch_transcript(video_id)
 
     if not transcript:
         print_colored("❌ Error: Could not fetch transcript for this video.", "red")
@@ -210,18 +214,20 @@ Examples:
         print_colored("  - The video is private or unavailable", "white")
         sys.exit(1)
 
-    if args.verbose:
-        transcript_tokens = estimate_tokens(transcript)
-        print_colored(f"✅ Transcript fetched: {len(transcript)} characters, ~{transcript_tokens} tokens", "green")
+    with app.app_context():
+        if args.verbose:
+            transcript_tokens = estimate_tokens(transcript)
+            print_colored(f"✅ Transcript fetched: {len(transcript)} characters, ~{transcript_tokens} tokens", "green")
 
-        chunks = chunk_transcript(transcript)
-        print_colored(f"📦 Split into {len(chunks)} chunks for processing", "blue")
+            chunks = chunk_transcript(transcript)
+            print_colored(f"📦 Split into {len(chunks)} chunks for processing", "blue")
 
     # Generate summaries
     print_colored("🤖 Generating summaries with OpenAI...", "magenta")
 
     try:
-        summaries = summarize_transcript(transcript)
+        with app.app_context():
+            summaries = summarize_transcript(transcript)
 
         if args.verbose:
             print_colored("✅ Summaries generated successfully", "green")
