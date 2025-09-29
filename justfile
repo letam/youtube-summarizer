@@ -9,6 +9,7 @@ default:
 
 # Install production dependencies only
 install:
+    [ -d venv ] || python3 -m venv venv
     {{venv}}/pip install -r requirements.txt
 
 # Install both production and development dependencies
