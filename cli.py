@@ -35,22 +35,45 @@ load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 
+class DatabaseManager:
+    """Manages database operations for CLI usage."""
+
+    def __init__(self):
+        self.app = None
+        self._setup_app()
+
+    def _setup_app(self):
+        """Create and configure Flask app for database operations."""
+        from flask import Flask
+
+        self.app = Flask(__name__)
+        self.app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///app.db"
+        self.app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+
+        # Initialize database with the app
+        db.init_app(self.app)
+
+        # Create tables
+        with self.app.app_context():
+            db.create_all()
+
+    def get_app(self):
+        """Get the Flask app instance."""
+        return self.app
+
+    def execute_in_context(self, func, *args, **kwargs):
+        """Execute a function within the Flask application context."""
+        with self.app.app_context():
+            return func(*args, **kwargs)
+
+
+# Global database manager instance
+db_manager = DatabaseManager()
+
+
 def setup_database():
-    """Initialize the database connection for CLI usage."""
-    from flask import Flask
-    from flask_sqlalchemy import SQLAlchemy
-
-    # Create a minimal Flask app for database operations
-    app = Flask(__name__)
-    app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///app.db"
-    app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
-
-    db.init_app(app)
-
-    with app.app_context():
-        db.create_all()
-
-    return app
+    """Legacy function for backward compatibility - returns the app instance."""
+    return db_manager.get_app()
 
 
 def print_colored(text: str, color: str = "white") -> None:
@@ -99,9 +122,7 @@ def format_summary_output(summaries: dict, video_id: str) -> None:
 
 def list_processed_videos(limit: int = 10) -> None:
     """List previously processed videos."""
-    app = setup_database()
-
-    with app.app_context():
+    def _list_videos():
         videos = Transcript.query.order_by(Transcript.created_at.desc()).limit(limit).all()
 
         if not videos:
@@ -123,6 +144,8 @@ def list_processed_videos(limit: int = 10) -> None:
                 print_colored(f"   Summaries: {', '.join(summary_types)}", "green")
 
             print()
+
+    db_manager.execute_in_context(_list_videos)
 
 
 def main():
@@ -196,15 +219,12 @@ Examples:
 
     if args.verbose:
         print_colored(f"✅ Video ID extracted: {video_id}", "green")
-
-    # Setup database and fetch transcript
-    app = setup_database()
-
-    if args.verbose:
         print_colored("🔍 Fetching transcript...", "yellow")
 
-    with app.app_context():
-        transcript = fetch_transcript(video_id)
+    def _fetch_transcript():
+        return fetch_transcript(video_id)
+
+    transcript = db_manager.execute_in_context(_fetch_transcript)
 
     if not transcript:
         print_colored("❌ Error: Could not fetch transcript for this video.", "red")
@@ -214,7 +234,7 @@ Examples:
         print_colored("  - The video is private or unavailable", "white")
         sys.exit(1)
 
-    with app.app_context():
+    def _process_transcript():
         if args.verbose:
             transcript_tokens = estimate_tokens(transcript)
             print_colored(f"✅ Transcript fetched: {len(transcript)} characters, ~{transcript_tokens} tokens", "green")
@@ -222,12 +242,13 @@ Examples:
             chunks = chunk_transcript(transcript)
             print_colored(f"📦 Split into {len(chunks)} chunks for processing", "blue")
 
+        return summarize_transcript(transcript)
+
     # Generate summaries
     print_colored("🤖 Generating summaries with OpenAI...", "magenta")
 
     try:
-        with app.app_context():
-            summaries = summarize_transcript(transcript)
+        summaries = db_manager.execute_in_context(_process_transcript)
 
         if args.verbose:
             print_colored("✅ Summaries generated successfully", "green")
