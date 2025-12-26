@@ -20,7 +20,13 @@ load_dotenv()
 
 # ==== Configuration ====
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-MODEL = "gpt-4o"  # or "o3-mini"
+MODELS = {
+    "latest": "gpt-5.2",
+    "last": "gpt-5.1",
+    "mini": "gpt-5-mini",
+    "nano": "gpt-5-nano",
+}
+MODEL = MODELS["latest"]
 MAX_TOKENS_PER_CHUNK = 4000  # Conservative estimate to stay within rate limits
 CHUNK_OVERLAP = 200  # Number of tokens to overlap between chunks
 
