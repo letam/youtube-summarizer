@@ -350,7 +350,7 @@ TEMPLATE = """
             align-items: center;
             margin-bottom: 0.5rem;
         }
-        .resummarize-btn {
+        .resummarize-btn, .copy-btn {
             padding: 0.25rem 0.5rem;
             font-size: 0.8em;
             background: #0066cc;
@@ -359,10 +359,32 @@ TEMPLATE = """
             border-radius: 4px;
             cursor: pointer;
         }
-        .resummarize-btn:hover {
+        .resummarize-btn:hover, .copy-btn:hover {
             background: #0052a3;
         }
+        .copy-btn {
+            background: #28a745;
+        }
+        .copy-btn:hover {
+            background: #218838;
+        }
+        .btn-group {
+            display: flex;
+            gap: 0.5rem;
+        }
     </style>
+    <script>
+        function copyToClipboard(btn) {
+            const section = btn.closest('.summary-section');
+            const content = section.querySelector('.summary-content');
+            const text = content.innerText || content.textContent;
+            navigator.clipboard.writeText(text).then(() => {
+                const original = btn.textContent;
+                btn.textContent = 'Copied!';
+                setTimeout(() => btn.textContent = original, 1500);
+            });
+        }
+    </script>
 </head>
 <body>
     <h1>YouTube Transcript Summarizer</h1>
@@ -377,8 +399,11 @@ TEMPLATE = """
         <h2>Summaries:</h2>
         {% for summary_type, content in summaries.items() %}
             <div class="summary-section">
-                <div class="summary-type">{{ summary_type|title }} Summary:</div>
-                <textarea readonly>{{ content }}</textarea>
+                <div class="summary-header">
+                    <div class="summary-type">{{ summary_type|title }} Summary:</div>
+                    <button type="button" class="copy-btn" onclick="copyToClipboard(this)">Copy</button>
+                </div>
+                <textarea readonly class="summary-content">{{ content }}</textarea>
             </div>
         {% endfor %}
     {% endif %}
@@ -401,11 +426,14 @@ TEMPLATE = """
                             <div class="summary-section">
                                 <div class="summary-header">
                                     <div class="summary-type">{{ summary.summary_type|title }} Summary:</div>
-                                    <form method="post" action="/summarize/{{ video.video_id }}/{{ summary.summary_type }}" style="margin: 0;">
-                                        <button type="submit" class="resummarize-btn">Resummarize</button>
-                                    </form>
+                                    <div class="btn-group">
+                                        <button type="button" class="copy-btn" onclick="copyToClipboard(this)">Copy</button>
+                                        <form method="post" action="/summarize/{{ video.video_id }}/{{ summary.summary_type }}" style="margin: 0;">
+                                            <button type="submit" class="resummarize-btn">Resummarize</button>
+                                        </form>
+                                    </div>
                                 </div>
-                                <p>{{ summary.content | replace('\n', '<br>') | safe }}</p>
+                                <p class="summary-content">{{ summary.content | replace('\n', '<br>') | safe }}</p>
                             </div>
                         {% endfor %}
                     {% endif %}
