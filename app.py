@@ -150,6 +150,37 @@ SUMMARY_INSTRUCTIONS = {
     'key_points': "Extract the key points and main takeaways from this portion of a YouTube transcript."
 }
 
+# Base token limits for chunk and final summaries
+BASE_CHUNK_TOKENS = 500
+BASE_FINAL_TOKENS = 1000
+
+# Multipliers for detailed summaries
+DETAILED_MULTIPLIER = 2
+
+
+def calculate_max_tokens(text: str, summary_type: str, is_final: bool = False) -> int:
+    """Calculate max output tokens based on transcript length and summary type."""
+    input_tokens = estimate_tokens(text)
+
+    # Scale base tokens by input length (longer transcripts get more output tokens)
+    # Use ~10% of input tokens as baseline, with min/max bounds
+    scaled_tokens = max(BASE_CHUNK_TOKENS, min(int(input_tokens * 0.1), 2000))
+
+    if is_final:
+        scaled_tokens = max(BASE_FINAL_TOKENS, min(int(input_tokens * 0.15), 4000))
+
+    # Detailed summaries get more tokens
+    if summary_type == 'detailed':
+        scaled_tokens = int(scaled_tokens * DETAILED_MULTIPLIER)
+
+    if app.debug:
+        context = "final" if is_final else "chunk"
+        app.logger.debug(
+            f"[{summary_type}] {context}: input_tokens={int(input_tokens)}, max_output_tokens={scaled_tokens}"
+        )
+
+    return scaled_tokens
+
 
 def generate_summary(text: str, summary_type: str) -> str:
     """Generate a single type of summary for the given text."""
@@ -161,23 +192,25 @@ def generate_summary(text: str, summary_type: str) -> str:
     chunk_summaries = []
 
     for chunk in chunks:
+        max_tokens = calculate_max_tokens(chunk, summary_type)
         response = client.responses.create(
             model=MODEL,
             instructions=instruction,
             input=chunk,
             temperature=0.5,
-            max_output_tokens=500,
+            max_output_tokens=max_tokens,
         )
         chunk_summaries.append(response.output_text)
 
     if len(chunk_summaries) > 1:
         combined_summary = " ".join(chunk_summaries)
+        max_tokens = calculate_max_tokens(text, summary_type, is_final=True)
         response = client.responses.create(
             model=MODEL,
             instructions=f"Create a coherent final {summary_type} summary from these partial summaries.",
             input=combined_summary,
             temperature=0.5,
-            max_output_tokens=1000,
+            max_output_tokens=max_tokens,
         )
         return response.output_text
     else:
