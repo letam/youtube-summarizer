@@ -150,36 +150,25 @@ SUMMARY_INSTRUCTIONS = {
     'key_points': "Extract the key points and main takeaways from this portion of a YouTube transcript."
 }
 
-# Base token limits for chunk and final summaries
-BASE_CHUNK_TOKENS = 500
-BASE_FINAL_TOKENS = 1000
-
-# Multipliers for detailed summaries
-DETAILED_MULTIPLIER = 2
+# Token config by summary type
+TOKEN_CONFIG = {
+    'concise': {'chunk_pct': 0.08, 'final_pct': 0.12, 'chunk_min': 300, 'chunk_max': 1000, 'final_min': 500, 'final_max': 2000},
+    'detailed': {'chunk_pct': 0.30, 'final_pct': 0.40, 'chunk_min': 2000, 'chunk_max': 4000, 'final_min': 4000, 'final_max': 16000},
+    'key_points': {'chunk_pct': 0.10, 'final_pct': 0.15, 'chunk_min': 500, 'chunk_max': 1500, 'final_min': 800, 'final_max': 3000},
+}
 
 
 def calculate_max_tokens(text: str, summary_type: str, is_final: bool = False) -> int:
     """Calculate max output tokens based on transcript length and summary type."""
     input_tokens = estimate_tokens(text)
+    config = TOKEN_CONFIG[summary_type]
+    context = 'final' if is_final else 'chunk'
 
-    # Scale base tokens by input length (longer transcripts get more output tokens)
-    # Use ~10% of input tokens as baseline, with min/max bounds
-    scaled_tokens = max(BASE_CHUNK_TOKENS, min(int(input_tokens * 0.1), 2000))
+    percentage = config[f'{context}_pct']
+    min_bound = config[f'{context}_min']
+    max_bound = config[f'{context}_max']
 
-    if is_final:
-        scaled_tokens = max(BASE_FINAL_TOKENS, min(int(input_tokens * 0.15), 4000))
-
-    # Detailed summaries get more tokens
-    if summary_type == 'detailed':
-        scaled_tokens = int(scaled_tokens * DETAILED_MULTIPLIER)
-
-    if app.debug:
-        context = "final" if is_final else "chunk"
-        app.logger.debug(
-            f"[{summary_type}] {context}: input_tokens={int(input_tokens)}, max_output_tokens={scaled_tokens}"
-        )
-
-    return scaled_tokens
+    return max(min_bound, min(int(input_tokens * percentage), max_bound))
 
 
 def generate_summary(text: str, summary_type: str) -> str:
@@ -189,9 +178,25 @@ def generate_summary(text: str, summary_type: str) -> str:
 
     chunks = chunk_transcript(text)
     instruction = SUMMARY_INSTRUCTIONS[summary_type]
-    chunk_summaries = []
 
-    for chunk in chunks:
+    # Single chunk - use final config since this is the only output
+    if len(chunks) == 1:
+        max_tokens = calculate_max_tokens(text, summary_type, is_final=True)
+        response = client.responses.create(
+            model=MODEL,
+            instructions=instruction,
+            input=chunks[0],
+            temperature=0.5,
+            max_output_tokens=max_tokens,
+        )
+        if app.debug:
+            actual = response.usage.output_tokens
+            app.logger.debug(f"[{summary_type}] final: {actual}/{max_tokens} tokens used")
+        return response.output_text
+
+    # Multiple chunks - summarize each, then combine
+    chunk_summaries = []
+    for i, chunk in enumerate(chunks):
         max_tokens = calculate_max_tokens(chunk, summary_type)
         response = client.responses.create(
             model=MODEL,
@@ -201,20 +206,23 @@ def generate_summary(text: str, summary_type: str) -> str:
             max_output_tokens=max_tokens,
         )
         chunk_summaries.append(response.output_text)
+        if app.debug:
+            actual = response.usage.output_tokens
+            app.logger.debug(f"[{summary_type}] chunk {i+1}/{len(chunks)}: {actual}/{max_tokens} tokens used")
 
-    if len(chunk_summaries) > 1:
-        combined_summary = " ".join(chunk_summaries)
-        max_tokens = calculate_max_tokens(text, summary_type, is_final=True)
-        response = client.responses.create(
-            model=MODEL,
-            instructions=f"Create a coherent final {summary_type} summary from these partial summaries.",
-            input=combined_summary,
-            temperature=0.5,
-            max_output_tokens=max_tokens,
-        )
-        return response.output_text
-    else:
-        return chunk_summaries[0]
+    combined_summary = " ".join(chunk_summaries)
+    max_tokens = calculate_max_tokens(text, summary_type, is_final=True)
+    response = client.responses.create(
+        model=MODEL,
+        instructions=f"Create a coherent final {summary_type} summary from these partial summaries.",
+        input=combined_summary,
+        temperature=0.5,
+        max_output_tokens=max_tokens,
+    )
+    if app.debug:
+        actual = response.usage.output_tokens
+        app.logger.debug(f"[{summary_type}] final: {actual}/{max_tokens} tokens used")
+    return response.output_text
 
 
 def summarize_transcript(text):
