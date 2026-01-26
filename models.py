@@ -9,6 +9,7 @@ class Transcript(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     video_id = db.Column(db.String(11), unique=True, nullable=False)
     transcript_text = db.Column(db.Text, nullable=False)
+    generated_title = db.Column(db.String(200), nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(
         db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
