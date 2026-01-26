@@ -6,6 +6,7 @@ from typing import List
 
 from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template_string, request
+from flask_migrate import Migrate
 from openai import OpenAI
 from sqlalchemy.orm import defer
 from werkzeug.utils import secure_filename
@@ -44,11 +45,10 @@ app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///app.db"
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 app.config["MAX_CONTENT_LENGTH"] = MAX_CONTENT_LENGTH
 db.init_app(app)
+migrate = Migrate(app, db)
 
-# Initialize database and upload folder
-with app.app_context():
-    db.create_all()
-    os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+# Initialize upload folder
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 # ==== Helper Functions ====
 
