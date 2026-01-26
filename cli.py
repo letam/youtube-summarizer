@@ -150,6 +150,73 @@ def list_processed_videos(limit: int = 10) -> None:
     db_manager.execute_in_context(_list_videos)
 
 
+def process_video(url: str, verbose: bool = False) -> None:
+    """Process a YouTube video URL and generate summaries."""
+    print_colored("🎬 YouTube Transcript Summarizer", "bold")
+    print_colored(f"Processing URL: {url}", "blue")
+
+    # Extract video ID
+    video_id = extract_video_id(url)
+    if not video_id:
+        print_colored("❌ Error: Invalid YouTube URL format.", "red")
+        print_colored("Make sure the URL contains a valid YouTube video ID.", "yellow")
+        sys.exit(1)
+
+    if verbose:
+        print_colored(f"✅ Video ID extracted: {video_id}", "green")
+        print_colored("🔍 Fetching transcript...", "yellow")
+
+    def _fetch_transcript():
+        return fetch_transcript(video_id)
+
+    transcript = db_manager.execute_in_context(_fetch_transcript)
+
+    if not transcript:
+        print_colored("❌ Error: Could not fetch transcript for this video.", "red")
+        print_colored("This might be because:", "yellow")
+        print_colored(
+            "  - The video doesn't have captions/transcripts available", "white"
+        )
+        print_colored("  - The video has disabled transcripts", "white")
+        print_colored("  - The video is private or unavailable", "white")
+        sys.exit(1)
+
+    def _process_transcript():
+        if verbose:
+            transcript_tokens = estimate_tokens(transcript)
+            print_colored(
+                f"✅ Transcript fetched: {len(transcript)} characters, ~{transcript_tokens} tokens",
+                "green",
+            )
+
+            chunks = chunk_transcript(transcript)
+            print_colored(f"📦 Split into {len(chunks)} chunks for processing", "blue")
+
+        return summarize_transcript(transcript)
+
+    # Generate summaries
+    print_colored("🤖 Generating summaries with OpenAI...", "magenta")
+
+    try:
+        summaries = db_manager.execute_in_context(_process_transcript)
+
+        if verbose:
+            print_colored("✅ Summaries generated successfully", "green")
+
+        # Display results
+        format_summary_output(summaries, video_id)
+
+        print_colored("✨ Summary complete! Video data saved to database.", "green")
+
+    except Exception as e:
+        print_colored(f"❌ Error generating summaries: {e!s}", "red")
+        if verbose:
+            import traceback
+
+            print_colored(traceback.format_exc(), "red")
+        sys.exit(1)
+
+
 def main():
     """Main CLI function."""
     parser = argparse.ArgumentParser(
@@ -208,70 +275,7 @@ Examples:
         )
         sys.exit(1)
 
-    # Process the URL
-    print_colored("🎬 YouTube Transcript Summarizer", "bold")
-    print_colored(f"Processing URL: {args.url}", "blue")
-
-    # Extract video ID
-    video_id = extract_video_id(args.url)
-    if not video_id:
-        print_colored("❌ Error: Invalid YouTube URL format.", "red")
-        print_colored("Make sure the URL contains a valid YouTube video ID.", "yellow")
-        sys.exit(1)
-
-    if args.verbose:
-        print_colored(f"✅ Video ID extracted: {video_id}", "green")
-        print_colored("🔍 Fetching transcript...", "yellow")
-
-    def _fetch_transcript():
-        return fetch_transcript(video_id)
-
-    transcript = db_manager.execute_in_context(_fetch_transcript)
-
-    if not transcript:
-        print_colored("❌ Error: Could not fetch transcript for this video.", "red")
-        print_colored("This might be because:", "yellow")
-        print_colored(
-            "  - The video doesn't have captions/transcripts available", "white"
-        )
-        print_colored("  - The video has disabled transcripts", "white")
-        print_colored("  - The video is private or unavailable", "white")
-        sys.exit(1)
-
-    def _process_transcript():
-        if args.verbose:
-            transcript_tokens = estimate_tokens(transcript)
-            print_colored(
-                f"✅ Transcript fetched: {len(transcript)} characters, ~{transcript_tokens} tokens",
-                "green",
-            )
-
-            chunks = chunk_transcript(transcript)
-            print_colored(f"📦 Split into {len(chunks)} chunks for processing", "blue")
-
-        return summarize_transcript(transcript)
-
-    # Generate summaries
-    print_colored("🤖 Generating summaries with OpenAI...", "magenta")
-
-    try:
-        summaries = db_manager.execute_in_context(_process_transcript)
-
-        if args.verbose:
-            print_colored("✅ Summaries generated successfully", "green")
-
-        # Display results
-        format_summary_output(summaries, video_id)
-
-        print_colored("✨ Summary complete! Video data saved to database.", "green")
-
-    except Exception as e:
-        print_colored(f"❌ Error generating summaries: {e!s}", "red")
-        if args.verbose:
-            import traceback
-
-            print_colored(traceback.format_exc(), "red")
-        sys.exit(1)
+    process_video(args.url, args.verbose)
 
 
 if __name__ == "__main__":
