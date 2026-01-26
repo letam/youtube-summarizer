@@ -342,6 +342,73 @@ def summarize(video_id, summary_type):
     )
 
 
+@app.route("/api/summarize", methods=["POST"])
+def api_summarize():
+    """API endpoint to summarize a video and return JSON."""
+    data = request.get_json()
+    url = data.get("url", "")
+    video_id = extract_video_id(url)
+
+    if not video_id:
+        return jsonify({"error": "Invalid YouTube URL."}), 400
+
+    transcript = fetch_transcript(video_id)
+    if not transcript:
+        return jsonify({"error": "Transcript not available for this video."}), 404
+
+    summaries = summarize_transcript(transcript)
+
+    # Update summaries in database
+    transcript_record = Transcript.query.filter_by(video_id=video_id).first()
+    if transcript_record:
+        Summary.query.filter_by(transcript_id=transcript_record.id).delete()
+        for summary_type, content in summaries.items():
+            new_summary = Summary(
+                transcript_id=transcript_record.id,
+                summary_type=summary_type,
+                content=content,
+            )
+            db.session.add(new_summary)
+        db.session.commit()
+
+    return jsonify(
+        {
+            "video_id": video_id,
+            "timestamp": transcript_record.created_at.strftime("%Y-%m-%d %H:%M:%S"),
+            "summaries": [{"type": k, "content": v} for k, v in summaries.items()],
+        }
+    )
+
+
+@app.route("/api/video/<video_id>/resummarize/<summary_type>", methods=["POST"])
+def api_resummarize(video_id, summary_type):
+    """API endpoint to regenerate a single summary type."""
+    transcript_record = Transcript.query.filter_by(video_id=video_id).first()
+
+    if not transcript_record:
+        return jsonify({"error": "Video not found."}), 404
+    if summary_type not in SUMMARY_INSTRUCTIONS:
+        return jsonify({"error": "Invalid summary type."}), 400
+
+    new_content = generate_summary(transcript_record.transcript_text, summary_type)
+
+    existing_summary = Summary.query.filter_by(
+        transcript_id=transcript_record.id, summary_type=summary_type
+    ).first()
+    if existing_summary:
+        existing_summary.content = new_content
+    else:
+        new_summary = Summary(
+            transcript_id=transcript_record.id,
+            summary_type=summary_type,
+            content=new_content,
+        )
+        db.session.add(new_summary)
+    db.session.commit()
+
+    return jsonify({"type": summary_type, "content": new_content})
+
+
 @app.route("/api/video/<video_id>/transcript")
 def get_transcript(video_id):
     """API endpoint to fetch transcript on demand."""
@@ -475,6 +542,39 @@ TEMPLATE = """
             border-radius: 4px;
             border: 1px solid #ddd;
         }
+        .status-message {
+            padding: 0.75rem;
+            margin-top: 1rem;
+            border-radius: 4px;
+            display: none;
+        }
+        .status-message.loading {
+            display: block;
+            background: #e3f2fd;
+            color: #1565c0;
+        }
+        .status-message.error {
+            display: block;
+            background: #ffebee;
+            color: #c62828;
+        }
+        .status-message.success {
+            display: block;
+            background: #e8f5e9;
+            color: #2e7d32;
+        }
+        #submit-btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        .new-result {
+            margin-top: 1rem;
+            padding: 1rem;
+            border: 2px solid #28a745;
+            border-radius: 4px;
+            background: #f8fff8;
+        }
+        .new-result h3 { margin-top: 0; }
     </style>
     <script>
         function copyToClipboard(btn) {
@@ -486,6 +586,138 @@ TEMPLATE = """
                 btn.textContent = 'Copied!';
                 setTimeout(() => btn.textContent = original, 1500);
             });
+        }
+
+        function createVideoItemHTML(videoId, timestamp, summaries) {
+            const summariesHTML = summaries.map(s => `
+                <div class="summary-section">
+                    <div class="summary-header">
+                        <div class="summary-type">${s.type.charAt(0).toUpperCase() + s.type.slice(1)} Summary:</div>
+                        <div class="btn-group">
+                            <button type="button" class="copy-btn" onclick="copyToClipboard(this)">Copy</button>
+                            <button type="button" class="resummarize-btn" onclick="resummarize(this, '${videoId}', '${s.type}')">Resummarize</button>
+                        </div>
+                    </div>
+                    <p class="summary-content">${s.content.replace(/\\n/g, '<br>')}</p>
+                </div>
+            `).join('');
+
+            return `
+                <div class="video-item" data-video-id="${videoId}">
+                    <h3>
+                        <a href="https://youtube.com/watch?v=${videoId}" class="video-link" target="_blank">
+                            Video ID: ${videoId}
+                        </a>
+                    </h3>
+                    <div class="timestamp">Processed: ${timestamp}</div>
+                    <div class="btn-group" style="margin-bottom: 0.5rem;">
+                        <button type="button" class="transcript-toggle" onclick="toggleTranscript(this, '${videoId}')">Show Transcript</button>
+                        <button type="button" class="transcript-toggle" onclick="toggleSummaries(this, '${videoId}')">Show Summaries</button>
+                    </div>
+                    <div class="transcript-section">
+                        <div class="transcript-header">
+                            <span class="transcript-label">Transcript:</span>
+                            <button type="button" class="copy-btn" onclick="copyToClipboard(this)">Copy</button>
+                        </div>
+                        <div class="transcript-content"></div>
+                    </div>
+                    <div class="summaries-container" style="display: none;" data-loaded="true">${summariesHTML}</div>
+                </div>
+            `;
+        }
+
+        async function handleSubmit(e) {
+            e.preventDefault();
+            const form = e.target;
+            const urlInput = form.querySelector('input[name="url"]');
+            const submitBtn = form.querySelector('#submit-btn');
+            const statusDiv = document.getElementById('status-message');
+            const resultDiv = document.getElementById('new-result');
+            const videoList = document.getElementById('video-list-container');
+
+            const url = urlInput.value.trim();
+            if (!url) return;
+
+            // Update UI for loading state
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Summarizing...';
+            statusDiv.className = 'status-message loading';
+            statusDiv.textContent = 'Fetching transcript and generating summaries...';
+            resultDiv.innerHTML = '';
+            resultDiv.style.display = 'none';
+
+            try {
+                const res = await fetch('/api/summarize', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url })
+                });
+                const data = await res.json();
+
+                if (!res.ok) {
+                    throw new Error(data.error || 'Failed to summarize video');
+                }
+
+                // Success - update UI
+                statusDiv.className = 'status-message success';
+                statusDiv.textContent = 'Summary complete!';
+
+                // Remove existing entry for this video if present
+                const existing = videoList.querySelector(`[data-video-id="${data.video_id}"]`);
+                if (existing) existing.remove();
+
+                // Add new video item at the top
+                const newItemHTML = createVideoItemHTML(data.video_id, data.timestamp, data.summaries);
+                videoList.insertAdjacentHTML('afterbegin', newItemHTML);
+
+                // Remove "no videos" message if present
+                const noVideos = videoList.querySelector('p');
+                if (noVideos && noVideos.textContent.includes('No videos')) {
+                    noVideos.remove();
+                }
+
+                // Clear input
+                urlInput.value = '';
+
+                // Hide status after delay
+                setTimeout(() => { statusDiv.style.display = 'none'; }, 3000);
+
+            } catch (err) {
+                statusDiv.className = 'status-message error';
+                statusDiv.textContent = err.message;
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'Summarize';
+            }
+        }
+
+        async function resummarize(btn, videoId, summaryType) {
+            const section = btn.closest('.summary-section');
+            const content = section.querySelector('.summary-content');
+            const originalText = content.innerHTML;
+
+            btn.disabled = true;
+            btn.textContent = 'Working...';
+            content.innerHTML = '<em>Regenerating summary...</em>';
+
+            try {
+                const res = await fetch(`/api/video/${videoId}/resummarize/${summaryType}`, {
+                    method: 'POST'
+                });
+                const data = await res.json();
+
+                if (!res.ok) {
+                    throw new Error(data.error || 'Failed to resummarize');
+                }
+
+                content.innerHTML = data.content.replace(/\\n/g, '<br>');
+            } catch (err) {
+                content.innerHTML = originalText;
+                alert('Failed to resummarize: ' + err.message);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Resummarize';
+            }
         }
 
         async function toggleTranscript(btn, videoId) {
@@ -565,31 +797,19 @@ TEMPLATE = """
 </head>
 <body>
     <h1>YouTube Transcript Summarizer</h1>
-    <form method="post">
+    <form onsubmit="handleSubmit(event)">
         <input name="url" type="text" placeholder="Enter YouTube URL" style="width:100%; padding: 0.5rem;" required>
-        <button type="submit" style="margin-top:1rem; padding:0.5rem 1rem;">Summarize</button>
+        <button type="submit" id="submit-btn" style="margin-top:1rem; padding:0.5rem 1rem;">Summarize</button>
     </form>
-    {% if error %}
-        <p class="error">{{ error }}</p>
-    {% endif %}
-    {% if summaries %}
-        <h2>Summaries:</h2>
-        {% for summary_type, content in summaries.items() %}
-            <div class="summary-section">
-                <div class="summary-header">
-                    <div class="summary-type">{{ summary_type|title }} Summary:</div>
-                    <button type="button" class="copy-btn" onclick="copyToClipboard(this)">Copy</button>
-                </div>
-                <textarea readonly class="summary-content">{{ content }}</textarea>
-            </div>
-        {% endfor %}
-    {% endif %}
+    <div id="status-message" class="status-message"></div>
+    <div id="new-result"></div>
 
     <div class="video-list">
         <h2>Processed Videos</h2>
+        <div id="video-list-container">
         {% if processed_videos %}
             {% for video in processed_videos %}
-                <div class="video-item">
+                <div class="video-item" data-video-id="{{ video.video_id }}">
                     <h3>
                         <a href="https://youtube.com/watch?v={{ video.video_id }}" class="video-link" target="_blank">
                             Video ID: {{ video.video_id }}
@@ -615,6 +835,7 @@ TEMPLATE = """
         {% else %}
             <p>No videos have been processed yet.</p>
         {% endif %}
+        </div>
     </div>
 </body>
 </html>
