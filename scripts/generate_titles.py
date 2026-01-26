@@ -3,12 +3,16 @@
 Generate titles for video records based on their transcript/summary content.
 
 Usage:
-    python generate_titles.py          # Generate titles for records without one
-    python generate_titles.py --all    # Regenerate titles for all records
+    python scripts/generate_titles.py          # Generate titles for records without one
+    python scripts/generate_titles.py --all    # Regenerate titles for all records
 """
 
 import argparse
 import os
+import sys
+
+# Add parent directory to path for imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from dotenv import load_dotenv
 from openai import OpenAI
