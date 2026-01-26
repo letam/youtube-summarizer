@@ -372,17 +372,64 @@ TEMPLATE = """
             display: flex;
             gap: 0.5rem;
         }
+        .transcript-toggle {
+            padding: 0.4rem 0.8rem;
+            font-size: 0.9em;
+            background: #6c757d;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-bottom: 0.5rem;
+        }
+        .transcript-toggle:hover {
+            background: #5a6268;
+        }
+        .transcript-section {
+            margin-top: 0.5rem;
+            margin-bottom: 1rem;
+            padding: 1rem;
+            background: #e9ecef;
+            border-radius: 4px;
+            display: none;
+        }
+        .transcript-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.5rem;
+        }
+        .transcript-label {
+            font-weight: bold;
+            color: #333;
+        }
+        .transcript-content {
+            white-space: pre-wrap;
+            font-size: 0.9em;
+            max-height: 300px;
+            overflow-y: auto;
+            background: white;
+            padding: 0.75rem;
+            border-radius: 4px;
+            border: 1px solid #ddd;
+        }
     </style>
     <script>
         function copyToClipboard(btn) {
-            const section = btn.closest('.summary-section');
-            const content = section.querySelector('.summary-content');
+            const section = btn.closest('.summary-section, .transcript-section');
+            const content = section.querySelector('.summary-content, .transcript-content');
             const text = content.innerText || content.textContent;
             navigator.clipboard.writeText(text).then(() => {
                 const original = btn.textContent;
                 btn.textContent = 'Copied!';
                 setTimeout(() => btn.textContent = original, 1500);
             });
+        }
+        function toggleTranscript(btn) {
+            const section = btn.nextElementSibling;
+            const isHidden = section.style.display === 'none' || !section.style.display;
+            section.style.display = isHidden ? 'block' : 'none';
+            btn.textContent = isHidden ? 'Hide Transcript' : 'Show Transcript';
         }
     </script>
 </head>
@@ -420,6 +467,14 @@ TEMPLATE = """
                     </h3>
                     <div class="timestamp">
                         Processed: {{ video.created_at.strftime('%Y-%m-%d %H:%M:%S') }}
+                    </div>
+                    <button type="button" class="transcript-toggle" onclick="toggleTranscript(this)">Show Transcript</button>
+                    <div class="transcript-section">
+                        <div class="transcript-header">
+                            <span class="transcript-label">Transcript:</span>
+                            <button type="button" class="copy-btn" onclick="copyToClipboard(this)">Copy</button>
+                        </div>
+                        <div class="transcript-content">{{ video.transcript_text }}</div>
                     </div>
                     {% if video.summaries %}
                         {% for summary in video.summaries %}
