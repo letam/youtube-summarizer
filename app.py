@@ -557,6 +557,123 @@ def get_summaries(video_id):
     return jsonify({"summaries": summaries, "video_id": video_id})
 
 
+# ==== Audio API Endpoints ====
+
+
+@app.route("/api/audio/transcribe", methods=["POST"])
+def api_audio_transcribe():
+    """Upload and transcribe an audio file."""
+    if "file" not in request.files:
+        return jsonify({"error": "No file provided"}), 400
+
+    uploaded_file = request.files["file"]
+
+    try:
+        transcript = process_audio_upload(uploaded_file)
+        return jsonify({
+            "source_id": transcript.source_id,
+            "transcript": transcript.transcript_text,
+            "original_filename": transcript.original_filename,
+            "duration_seconds": transcript.audio_duration_seconds,
+            "created_at": transcript.created_at.strftime("%Y-%m-%d %H:%M:%S"),
+        })
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except RuntimeError as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/audio/<source_id>/summarize", methods=["POST"])
+def api_audio_summarize(source_id):
+    """Generate summaries for an audio transcript."""
+    transcript_record = Transcript.query.filter_by(
+        source_type="audio", source_id=source_id
+    ).first()
+
+    if not transcript_record:
+        return jsonify({"error": "Audio transcript not found"}), 404
+
+    summaries = summarize_transcript(transcript_record.transcript_text)
+
+    # Update summaries in database
+    Summary.query.filter_by(transcript_id=transcript_record.id).delete()
+    for summary_type, content in summaries.items():
+        new_summary = Summary(
+            transcript_id=transcript_record.id,
+            summary_type=summary_type,
+            content=content,
+        )
+        db.session.add(new_summary)
+    db.session.commit()
+
+    return jsonify({
+        "source_id": source_id,
+        "summaries": [{"type": k, "content": v} for k, v in summaries.items()],
+    })
+
+
+@app.route("/api/audio/<source_id>/transcript")
+def api_audio_get_transcript(source_id):
+    """Get transcript for an audio file."""
+    transcript_record = Transcript.query.filter_by(
+        source_type="audio", source_id=source_id
+    ).first()
+
+    if not transcript_record:
+        return jsonify({"error": "Audio transcript not found"}), 404
+
+    return jsonify({
+        "source_id": source_id,
+        "original_filename": transcript_record.original_filename,
+        "transcript": transcript_record.transcript_text,
+        "duration_seconds": transcript_record.audio_duration_seconds,
+    })
+
+
+@app.route("/api/audio/<source_id>/summaries")
+def api_audio_get_summaries(source_id):
+    """Get summaries for an audio transcript."""
+    transcript_record = Transcript.query.filter_by(
+        source_type="audio", source_id=source_id
+    ).first()
+
+    if not transcript_record:
+        return jsonify({"error": "Audio transcript not found"}), 404
+
+    summaries = [
+        {"type": s.summary_type, "content": s.content}
+        for s in transcript_record.summaries
+    ]
+    return jsonify({"summaries": summaries, "source_id": source_id})
+
+
+@app.route("/api/audio/list")
+def api_audio_list():
+    """List all audio transcriptions."""
+    limit = request.args.get("limit", 50, type=int)
+
+    transcripts = (
+        Transcript.query.filter_by(source_type="audio")
+        .options(defer(Transcript.transcript_text))
+        .order_by(Transcript.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+    return jsonify({
+        "transcripts": [
+            {
+                "source_id": t.source_id,
+                "original_filename": t.original_filename,
+                "duration_seconds": t.audio_duration_seconds,
+                "created_at": t.created_at.strftime("%Y-%m-%d %H:%M:%S"),
+                "has_summaries": len(t.summaries) > 0,
+            }
+            for t in transcripts
+        ]
+    })
+
+
 # ==== Template ====
 
 TEMPLATE = """
