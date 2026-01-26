@@ -10,11 +10,8 @@ from flask_migrate import Migrate
 from openai import OpenAI
 from sqlalchemy.orm import defer
 from werkzeug.utils import secure_filename
-from youtube_transcript_api import (
-    NoTranscriptFound,
-    TranscriptsDisabled,
-    YouTubeTranscriptApi,
-)
+from youtube_transcript_api import YouTubeTranscriptApi
+from youtube_transcript_api._errors import NoTranscriptFound, TranscriptsDisabled
 
 from models import Summary, Transcript, db
 
@@ -69,7 +66,8 @@ def fetch_transcript(video_id):
             return existing_transcript.transcript_text
 
         # If not in database, fetch from YouTube
-        transcript = YouTubeTranscriptApi.get_transcript(video_id)
+        ytt_api = YouTubeTranscriptApi()
+        transcript = ytt_api.fetch(video_id).to_raw_data()
         full_text = " ".join([t["text"] for t in transcript])
 
         # Save to database
