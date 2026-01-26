@@ -1,11 +1,14 @@
+import hashlib
 import os
 import re
+from datetime import datetime
 from typing import List
 
 from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template_string, request
 from openai import OpenAI
 from sqlalchemy.orm import defer
+from werkzeug.utils import secure_filename
 from youtube_transcript_api import (
     NoTranscriptFound,
     TranscriptsDisabled,
@@ -31,14 +34,21 @@ MODEL = MODELS["latest"]
 MAX_TOKENS_PER_CHUNK = 4000  # Conservative estimate to stay within rate limits
 CHUNK_OVERLAP = 200  # Number of tokens to overlap between chunks
 
+# Audio configuration
+UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "instance", "uploads")
+MAX_CONTENT_LENGTH = 25 * 1024 * 1024  # 25MB (Whisper API limit)
+ALLOWED_AUDIO_EXTENSIONS = {"mp3", "mp4", "mpeg", "mpga", "m4a", "wav", "webm"}
+
 # Database configuration
 app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///app.db"
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+app.config["MAX_CONTENT_LENGTH"] = MAX_CONTENT_LENGTH
 db.init_app(app)
 
-# Initialize database
+# Initialize database and upload folder
 with app.app_context():
     db.create_all()
+    os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 # ==== Helper Functions ====
 
@@ -52,7 +62,9 @@ def extract_video_id(url):
 def fetch_transcript(video_id):
     try:
         # Check if transcript exists in database
-        existing_transcript = Transcript.query.filter_by(video_id=video_id).first()
+        existing_transcript = Transcript.query.filter_by(
+            source_type="youtube", source_id=video_id
+        ).first()
         if existing_transcript:
             return existing_transcript.transcript_text
 
@@ -61,13 +73,115 @@ def fetch_transcript(video_id):
         full_text = " ".join([t["text"] for t in transcript])
 
         # Save to database
-        new_transcript = Transcript(video_id=video_id, transcript_text=full_text)
+        new_transcript = Transcript(
+            source_type="youtube",
+            source_id=video_id,
+            transcript_text=full_text,
+        )
         db.session.add(new_transcript)
         db.session.commit()
 
         return full_text
     except (TranscriptsDisabled, NoTranscriptFound):
         return None
+
+
+# ==== Audio Helper Functions ====
+
+
+def allowed_audio_file(filename):
+    """Check if file extension is allowed for audio uploads."""
+    return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_AUDIO_EXTENSIONS
+
+
+def generate_audio_source_id(filename):
+    """Generate unique source_id for audio files."""
+    unique_string = f"{filename}_{datetime.utcnow().isoformat()}"
+    hash_value = hashlib.sha256(unique_string.encode()).hexdigest()[:16]
+    return f"audio_{hash_value}"
+
+
+def save_audio_file(uploaded_file, source_id):
+    """Save uploaded audio file to uploads folder.
+
+    Returns:
+        Path to saved file
+    """
+    filename = secure_filename(uploaded_file.filename)
+    ext = filename.rsplit(".", 1)[1].lower() if "." in filename else "mp3"
+    save_filename = f"{source_id}.{ext}"
+    file_path = os.path.join(UPLOAD_FOLDER, save_filename)
+    uploaded_file.save(file_path)
+    return file_path
+
+
+def transcribe_audio(file_path):
+    """Transcribe audio file using OpenAI Whisper API.
+
+    Returns:
+        dict with 'text' and optional 'duration' keys
+    """
+    with open(file_path, "rb") as audio_file:
+        response = client.audio.transcriptions.create(
+            model="whisper-1",
+            file=audio_file,
+            response_format="verbose_json",
+        )
+    return {
+        "text": response.text,
+        "duration": getattr(response, "duration", None),
+    }
+
+
+def process_audio_upload(uploaded_file):
+    """Process uploaded audio file: validate, save, transcribe, and store.
+
+    Args:
+        uploaded_file: Flask FileStorage object
+
+    Returns:
+        Transcript record
+
+    Raises:
+        ValueError: Invalid file type or size
+        RuntimeError: Transcription failed
+    """
+    if not uploaded_file or not uploaded_file.filename:
+        raise ValueError("No file provided")
+
+    if not allowed_audio_file(uploaded_file.filename):
+        raise ValueError(f"Invalid file type. Allowed: {', '.join(ALLOWED_AUDIO_EXTENSIONS)}")
+
+    # Generate unique ID
+    source_id = generate_audio_source_id(uploaded_file.filename)
+    original_filename = secure_filename(uploaded_file.filename)
+
+    # Save file
+    file_path = save_audio_file(uploaded_file, source_id)
+
+    try:
+        # Transcribe
+        result = transcribe_audio(file_path)
+
+        # Save to database
+        transcript = Transcript(
+            source_type="audio",
+            source_id=source_id,
+            transcript_text=result["text"],
+            original_filename=original_filename,
+            file_path=file_path,
+            audio_duration_seconds=int(result["duration"]) if result.get("duration") else None,
+        )
+        db.session.add(transcript)
+        db.session.commit()
+
+        return transcript
+
+    except Exception as e:
+        # Clean up file on failure
+        if os.path.exists(file_path):
+            os.unlink(file_path)
+        raise RuntimeError(f"Transcription failed: {e}") from e
 
 
 def estimate_tokens(text: str) -> int:
@@ -279,7 +393,7 @@ def index():
                 summaries = summarize_transcript(transcript)
                 # Update summaries in database
                 transcript_record = Transcript.query.filter_by(
-                    video_id=video_id
+                    source_type="youtube", source_id=video_id
                 ).first()
                 if transcript_record:
                     # Delete existing summaries
@@ -294,9 +408,10 @@ def index():
                         db.session.add(new_summary)
                     db.session.commit()
 
-    # Get all processed videos (defer transcript_text for eco-friendly loading)
+    # Get all processed YouTube videos (defer transcript_text for eco-friendly loading)
     processed_videos = (
-        Transcript.query.options(defer(Transcript.transcript_text))
+        Transcript.query.filter_by(source_type="youtube")
+        .options(defer(Transcript.transcript_text))
         .order_by(Transcript.created_at.desc())
         .all()
     )
@@ -308,7 +423,9 @@ def index():
 @app.route("/summarize/<video_id>/<summary_type>", methods=["POST"])
 def summarize(video_id, summary_type):
     error = ""
-    transcript_record = Transcript.query.filter_by(video_id=video_id).first()
+    transcript_record = Transcript.query.filter_by(
+        source_type="youtube", source_id=video_id
+    ).first()
 
     if not transcript_record:
         error = "Video not found."
@@ -333,7 +450,8 @@ def summarize(video_id, summary_type):
 
     # Defer transcript_text for eco-friendly loading
     processed_videos = (
-        Transcript.query.options(defer(Transcript.transcript_text))
+        Transcript.query.filter_by(source_type="youtube")
+        .options(defer(Transcript.transcript_text))
         .order_by(Transcript.created_at.desc())
         .all()
     )
@@ -359,7 +477,9 @@ def api_summarize():
     summaries = summarize_transcript(transcript)
 
     # Update summaries in database
-    transcript_record = Transcript.query.filter_by(video_id=video_id).first()
+    transcript_record = Transcript.query.filter_by(
+        source_type="youtube", source_id=video_id
+    ).first()
     if transcript_record:
         Summary.query.filter_by(transcript_id=transcript_record.id).delete()
         for summary_type, content in summaries.items():
@@ -383,7 +503,9 @@ def api_summarize():
 @app.route("/api/video/<video_id>/resummarize/<summary_type>", methods=["POST"])
 def api_resummarize(video_id, summary_type):
     """API endpoint to regenerate a single summary type."""
-    transcript_record = Transcript.query.filter_by(video_id=video_id).first()
+    transcript_record = Transcript.query.filter_by(
+        source_type="youtube", source_id=video_id
+    ).first()
 
     if not transcript_record:
         return jsonify({"error": "Video not found."}), 404
@@ -412,7 +534,9 @@ def api_resummarize(video_id, summary_type):
 @app.route("/api/video/<video_id>/transcript")
 def get_transcript(video_id):
     """API endpoint to fetch transcript on demand."""
-    transcript_record = Transcript.query.filter_by(video_id=video_id).first()
+    transcript_record = Transcript.query.filter_by(
+        source_type="youtube", source_id=video_id
+    ).first()
     if not transcript_record:
         return jsonify({"error": "Video not found"}), 404
     return jsonify({"transcript": transcript_record.transcript_text})
@@ -421,7 +545,9 @@ def get_transcript(video_id):
 @app.route("/api/video/<video_id>/summaries")
 def get_summaries(video_id):
     """API endpoint to fetch summaries on demand."""
-    transcript_record = Transcript.query.filter_by(video_id=video_id).first()
+    transcript_record = Transcript.query.filter_by(
+        source_type="youtube", source_id=video_id
+    ).first()
     if not transcript_record:
         return jsonify({"error": "Video not found"}), 404
     summaries = [
@@ -809,18 +935,18 @@ TEMPLATE = """
         <div id="video-list-container">
         {% if processed_videos %}
             {% for video in processed_videos %}
-                <div class="video-item" data-video-id="{{ video.video_id }}">
+                <div class="video-item" data-video-id="{{ video.source_id }}">
                     <h3>
-                        <a href="https://youtube.com/watch?v={{ video.video_id }}" class="video-link" target="_blank">
-                            Video ID: {{ video.video_id }}
+                        <a href="https://youtube.com/watch?v={{ video.source_id }}" class="video-link" target="_blank">
+                            Video ID: {{ video.source_id }}
                         </a>
                     </h3>
                     <div class="timestamp">
                         Processed: {{ video.created_at.strftime('%Y-%m-%d %H:%M:%S') }}
                     </div>
                     <div class="btn-group" style="margin-bottom: 0.5rem;">
-                        <button type="button" class="transcript-toggle" onclick="toggleTranscript(this, '{{ video.video_id }}')">Show Transcript</button>
-                        <button type="button" class="transcript-toggle" onclick="toggleSummaries(this, '{{ video.video_id }}')">Show Summaries</button>
+                        <button type="button" class="transcript-toggle" onclick="toggleTranscript(this, '{{ video.source_id }}')">Show Transcript</button>
+                        <button type="button" class="transcript-toggle" onclick="toggleSummaries(this, '{{ video.source_id }}')">Show Summaries</button>
                     </div>
                     <div class="transcript-section">
                         <div class="transcript-header">

@@ -7,9 +7,13 @@ db = SQLAlchemy()
 
 class Transcript(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    video_id = db.Column(db.String(11), unique=True, nullable=False)
+    source_type = db.Column(db.String(20), nullable=False, default="youtube")
+    source_id = db.Column(db.String(255), unique=True, nullable=False)
     transcript_text = db.Column(db.Text, nullable=False)
     generated_title = db.Column(db.String(200), nullable=True)
+    original_filename = db.Column(db.String(255), nullable=True)
+    file_path = db.Column(db.String(500), nullable=True)
+    audio_duration_seconds = db.Column(db.Integer, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(
         db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
@@ -19,7 +23,7 @@ class Transcript(db.Model):
     )
 
     def __repr__(self):
-        return f"<Transcript {self.video_id}>"
+        return f"<Transcript {self.source_type}:{self.source_id}>"
 
 
 class Summary(db.Model):
