@@ -8,25 +8,19 @@ A command-line tool to summarize YouTube video transcripts using OpenAI's GPT mo
 import argparse
 import os
 import sys
-from typing import Optional
 
 from dotenv import load_dotenv
 from openai import OpenAI
-from youtube_transcript_api import NoTranscriptFound, TranscriptsDisabled
 
 # Import functions from the main app
 from app import (
+    chunk_transcript,
+    estimate_tokens,
     extract_video_id,
     fetch_transcript,
     summarize_transcript,
-    estimate_tokens,
-    chunk_transcript,
-    find_split_point,
-    MAX_TOKENS_PER_CHUNK,
-    CHUNK_OVERLAP,
-    MODEL
 )
-from models import db, Transcript, Summary
+from models import Transcript, db
 
 # Load environment variables
 load_dotenv()
@@ -87,7 +81,7 @@ def print_colored(text: str, color: str = "white") -> None:
         "cyan": "\033[96m",
         "white": "\033[97m",
         "bold": "\033[1m",
-        "reset": "\033[0m"
+        "reset": "\033[0m",
     }
 
     print(f"{colors.get(color, '')}{text}{colors['reset']}")
@@ -100,9 +94,9 @@ def format_summary_output(summaries: dict, video_id: str) -> None:
     print_colored(f"{'='*60}\n", "cyan")
 
     summary_types = {
-        'concise': ("📝", "cyan"),
-        'detailed': ("📋", "blue"),
-        'key_points': ("🔑", "green")
+        "concise": ("📝", "cyan"),
+        "detailed": ("📋", "blue"),
+        "key_points": ("🔑", "green"),
     }
 
     for summary_type, (icon, color) in summary_types.items():
@@ -112,7 +106,7 @@ def format_summary_output(summaries: dict, video_id: str) -> None:
 
             # Wrap text for better readability
             content = summaries[summary_type]
-            lines = content.split('\n')
+            lines = content.split("\n")
             for line in lines:
                 if line.strip():
                     print(f"  {line.strip()}")
@@ -122,8 +116,11 @@ def format_summary_output(summaries: dict, video_id: str) -> None:
 
 def list_processed_videos(limit: int = 10) -> None:
     """List previously processed videos."""
+
     def _list_videos():
-        videos = Transcript.query.order_by(Transcript.created_at.desc()).limit(limit).all()
+        videos = (
+            Transcript.query.order_by(Transcript.created_at.desc()).limit(limit).all()
+        )
 
         if not videos:
             print_colored("No videos have been processed yet.", "yellow")
@@ -135,8 +132,13 @@ def list_processed_videos(limit: int = 10) -> None:
 
         for i, video in enumerate(videos, 1):
             print_colored(f"{i}. Video ID: {video.video_id}", "white")
-            print_colored(f"   Processed: {video.created_at.strftime('%Y-%m-%d %H:%M:%S')}", "yellow")
-            print_colored(f"   URL: https://youtube.com/watch?v={video.video_id}", "blue")
+            print_colored(
+                f"   Processed: {video.created_at.strftime('%Y-%m-%d %H:%M:%S')}",
+                "yellow",
+            )
+            print_colored(
+                f"   URL: https://youtube.com/watch?v={video.video_id}", "blue"
+            )
 
             # Show summary types available
             summary_types = [s.summary_type for s in video.summaries]
@@ -159,32 +161,27 @@ Examples:
   %(prog)s --list
   %(prog)s --list --limit 5
   %(prog)s --help
-        """
+        """,
     )
 
-    parser.add_argument(
-        "url",
-        nargs="?",
-        help="YouTube video URL to summarize"
-    )
+    parser.add_argument("url", nargs="?", help="YouTube video URL to summarize")
 
     parser.add_argument(
-        "-l", "--list",
-        action="store_true",
-        help="List previously processed videos"
+        "-l", "--list", action="store_true", help="List previously processed videos"
     )
 
     parser.add_argument(
         "--limit",
         type=int,
         default=10,
-        help="Maximum number of videos to list (default: 10)"
+        help="Maximum number of videos to list (default: 10)",
     )
 
     parser.add_argument(
-        "-v", "--verbose",
+        "-v",
+        "--verbose",
         action="store_true",
-        help="Show detailed processing information"
+        help="Show detailed processing information",
     )
 
     args = parser.parse_args()
@@ -192,7 +189,9 @@ Examples:
     # Check if API key is set
     if not os.getenv("OPENAI_API_KEY"):
         print_colored("Error: OPENAI_API_KEY environment variable not set.", "red")
-        print_colored("Please set your OpenAI API key in a .env file or environment.", "yellow")
+        print_colored(
+            "Please set your OpenAI API key in a .env file or environment.", "yellow"
+        )
         sys.exit(1)
 
     # Handle list command
@@ -203,7 +202,10 @@ Examples:
     # Handle URL input
     if not args.url:
         parser.print_help()
-        print_colored("\nError: Please provide a YouTube URL or use --list to see processed videos.", "red")
+        print_colored(
+            "\nError: Please provide a YouTube URL or use --list to see processed videos.",
+            "red",
+        )
         sys.exit(1)
 
     # Process the URL
@@ -229,7 +231,9 @@ Examples:
     if not transcript:
         print_colored("❌ Error: Could not fetch transcript for this video.", "red")
         print_colored("This might be because:", "yellow")
-        print_colored("  - The video doesn't have captions/transcripts available", "white")
+        print_colored(
+            "  - The video doesn't have captions/transcripts available", "white"
+        )
         print_colored("  - The video has disabled transcripts", "white")
         print_colored("  - The video is private or unavailable", "white")
         sys.exit(1)
@@ -237,7 +241,10 @@ Examples:
     def _process_transcript():
         if args.verbose:
             transcript_tokens = estimate_tokens(transcript)
-            print_colored(f"✅ Transcript fetched: {len(transcript)} characters, ~{transcript_tokens} tokens", "green")
+            print_colored(
+                f"✅ Transcript fetched: {len(transcript)} characters, ~{transcript_tokens} tokens",
+                "green",
+            )
 
             chunks = chunk_transcript(transcript)
             print_colored(f"📦 Split into {len(chunks)} chunks for processing", "blue")
@@ -259,9 +266,10 @@ Examples:
         print_colored("✨ Summary complete! Video data saved to database.", "green")
 
     except Exception as e:
-        print_colored(f"❌ Error generating summaries: {str(e)}", "red")
+        print_colored(f"❌ Error generating summaries: {e!s}", "red")
         if args.verbose:
             import traceback
+
             print_colored(traceback.format_exc(), "red")
         sys.exit(1)
 

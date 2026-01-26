@@ -3,8 +3,9 @@ import re
 from typing import List
 
 from dotenv import load_dotenv
-from flask import Flask, render_template_string, request
+from flask import Flask, jsonify, render_template_string, request
 from openai import OpenAI
+from sqlalchemy.orm import defer
 from youtube_transcript_api import (
     NoTranscriptFound,
     TranscriptsDisabled,
@@ -77,8 +78,8 @@ def estimate_tokens(text: str) -> int:
     """
     # Count words and special characters
     words = len(text.split())
-    special_chars = len(re.findall(r'[^a-zA-Z0-9\s]', text))
-    numbers = len(re.findall(r'\d+', text))
+    special_chars = len(re.findall(r"[^a-zA-Z0-9\s]", text))
+    numbers = len(re.findall(r"\d+", text))
 
     # Weight different elements
     return (words * 1.3) + (special_chars * 0.5) + (numbers * 0.5)
@@ -87,22 +88,22 @@ def estimate_tokens(text: str) -> int:
 def find_split_point(text: str, max_tokens: int) -> int:
     """Find the best point to split text while respecting sentence boundaries."""
     # First try to split on paragraph breaks
-    paragraphs = text.split('\n\n')
+    paragraphs = text.split("\n\n")
     if len(paragraphs) > 1:
         current_length = 0
         for i, para in enumerate(paragraphs):
             current_length += estimate_tokens(para)
             if current_length > max_tokens:
-                return text.find('\n\n', text.find(paragraphs[i-1]))
+                return text.find("\n\n", text.find(paragraphs[i - 1]))
 
     # If no good paragraph break, try sentence breaks
-    sentences = re.split(r'(?<=[.!?])\s+', text)
+    sentences = re.split(r"(?<=[.!?])\s+", text)
     current_length = 0
     for i, sentence in enumerate(sentences):
         current_length += estimate_tokens(sentence)
         if current_length > max_tokens:
             # Find the position of the last complete sentence
-            return text.find(sentence, text.find(sentences[i-1]))
+            return text.find(sentence, text.find(sentences[i - 1]))
 
     return len(text)
 
@@ -132,7 +133,7 @@ def chunk_transcript(text: str, max_tokens: int = MAX_TOKENS_PER_CHUNK) -> List[
         # Move the remaining text forward, including some overlap
         if split_point < len(remaining_text):
             # Find the last sentence in the current chunk
-            last_sentence = re.search(r'[^.!?]+[.!?]', chunk[::-1])
+            last_sentence = re.search(r"[^.!?]+[.!?]", chunk[::-1])
             if last_sentence:
                 overlap_start = split_point - len(last_sentence.group(0))
                 remaining_text = remaining_text[overlap_start:]
@@ -145,16 +146,37 @@ def chunk_transcript(text: str, max_tokens: int = MAX_TOKENS_PER_CHUNK) -> List[
 
 
 SUMMARY_INSTRUCTIONS = {
-    'concise': "Summarize this portion of a YouTube transcript in a concise manner, focusing on the main points.",
-    'detailed': "Provide a detailed summary of this portion of a YouTube transcript, including important details and context.",
-    'key_points': "Extract the key points and main takeaways from this portion of a YouTube transcript."
+    "concise": "Summarize this portion of a YouTube transcript in a concise manner, focusing on the main points.",
+    "detailed": "Provide a detailed summary of this portion of a YouTube transcript, including important details and context.",
+    "key_points": "Extract the key points and main takeaways from this portion of a YouTube transcript.",
 }
 
 # Token config by summary type
 TOKEN_CONFIG = {
-    'concise': {'chunk_pct': 0.08, 'final_pct': 0.12, 'chunk_min': 300, 'chunk_max': 1000, 'final_min': 500, 'final_max': 2000},
-    'detailed': {'chunk_pct': 0.30, 'final_pct': 0.40, 'chunk_min': 2000, 'chunk_max': 4000, 'final_min': 4000, 'final_max': 16000},
-    'key_points': {'chunk_pct': 0.10, 'final_pct': 0.15, 'chunk_min': 500, 'chunk_max': 1500, 'final_min': 800, 'final_max': 3000},
+    "concise": {
+        "chunk_pct": 0.08,
+        "final_pct": 0.12,
+        "chunk_min": 300,
+        "chunk_max": 1000,
+        "final_min": 500,
+        "final_max": 2000,
+    },
+    "detailed": {
+        "chunk_pct": 0.30,
+        "final_pct": 0.40,
+        "chunk_min": 2000,
+        "chunk_max": 4000,
+        "final_min": 4000,
+        "final_max": 16000,
+    },
+    "key_points": {
+        "chunk_pct": 0.10,
+        "final_pct": 0.15,
+        "chunk_min": 500,
+        "chunk_max": 1500,
+        "final_min": 800,
+        "final_max": 3000,
+    },
 }
 
 
@@ -162,11 +184,11 @@ def calculate_max_tokens(text: str, summary_type: str, is_final: bool = False) -
     """Calculate max output tokens based on transcript length and summary type."""
     input_tokens = estimate_tokens(text)
     config = TOKEN_CONFIG[summary_type]
-    context = 'final' if is_final else 'chunk'
+    context = "final" if is_final else "chunk"
 
-    percentage = config[f'{context}_pct']
-    min_bound = config[f'{context}_min']
-    max_bound = config[f'{context}_max']
+    percentage = config[f"{context}_pct"]
+    min_bound = config[f"{context}_min"]
+    max_bound = config[f"{context}_max"]
 
     return max(min_bound, min(int(input_tokens * percentage), max_bound))
 
@@ -191,7 +213,9 @@ def generate_summary(text: str, summary_type: str) -> str:
         )
         if app.debug:
             actual = response.usage.output_tokens
-            app.logger.debug(f"[{summary_type}] final: {actual}/{max_tokens} tokens used")
+            app.logger.debug(
+                f"[{summary_type}] final: {actual}/{max_tokens} tokens used"
+            )
         return response.output_text
 
     # Multiple chunks - summarize each, then combine
@@ -208,7 +232,9 @@ def generate_summary(text: str, summary_type: str) -> str:
         chunk_summaries.append(response.output_text)
         if app.debug:
             actual = response.usage.output_tokens
-            app.logger.debug(f"[{summary_type}] chunk {i+1}/{len(chunks)}: {actual}/{max_tokens} tokens used")
+            app.logger.debug(
+                f"[{summary_type}] chunk {i+1}/{len(chunks)}: {actual}/{max_tokens} tokens used"
+            )
 
     combined_summary = " ".join(chunk_summaries)
     max_tokens = calculate_max_tokens(text, summary_type, is_final=True)
@@ -252,7 +278,9 @@ def index():
             else:
                 summaries = summarize_transcript(transcript)
                 # Update summaries in database
-                transcript_record = Transcript.query.filter_by(video_id=video_id).first()
+                transcript_record = Transcript.query.filter_by(
+                    video_id=video_id
+                ).first()
                 if transcript_record:
                     # Delete existing summaries
                     Summary.query.filter_by(transcript_id=transcript_record.id).delete()
@@ -261,14 +289,20 @@ def index():
                         new_summary = Summary(
                             transcript_id=transcript_record.id,
                             summary_type=summary_type,
-                            content=content
+                            content=content,
                         )
                         db.session.add(new_summary)
                     db.session.commit()
 
-    # Get all processed videos
-    processed_videos = Transcript.query.order_by(Transcript.created_at.desc()).all()
-    return render_template_string(TEMPLATE, summaries=summaries, error=error, processed_videos=processed_videos)
+    # Get all processed videos (defer transcript_text for eco-friendly loading)
+    processed_videos = (
+        Transcript.query.options(defer(Transcript.transcript_text))
+        .order_by(Transcript.created_at.desc())
+        .all()
+    )
+    return render_template_string(
+        TEMPLATE, summaries=summaries, error=error, processed_videos=processed_videos
+    )
 
 
 @app.route("/summarize/<video_id>/<summary_type>", methods=["POST"])
@@ -284,8 +318,7 @@ def summarize(video_id, summary_type):
         new_content = generate_summary(transcript_record.transcript_text, summary_type)
         # Update or create the summary
         existing_summary = Summary.query.filter_by(
-            transcript_id=transcript_record.id,
-            summary_type=summary_type
+            transcript_id=transcript_record.id, summary_type=summary_type
         ).first()
         if existing_summary:
             existing_summary.content = new_content
@@ -293,13 +326,42 @@ def summarize(video_id, summary_type):
             new_summary = Summary(
                 transcript_id=transcript_record.id,
                 summary_type=summary_type,
-                content=new_content
+                content=new_content,
             )
             db.session.add(new_summary)
         db.session.commit()
 
-    processed_videos = Transcript.query.order_by(Transcript.created_at.desc()).all()
-    return render_template_string(TEMPLATE, summaries={}, error=error, processed_videos=processed_videos)
+    # Defer transcript_text for eco-friendly loading
+    processed_videos = (
+        Transcript.query.options(defer(Transcript.transcript_text))
+        .order_by(Transcript.created_at.desc())
+        .all()
+    )
+    return render_template_string(
+        TEMPLATE, summaries={}, error=error, processed_videos=processed_videos
+    )
+
+
+@app.route("/api/video/<video_id>/transcript")
+def get_transcript(video_id):
+    """API endpoint to fetch transcript on demand."""
+    transcript_record = Transcript.query.filter_by(video_id=video_id).first()
+    if not transcript_record:
+        return jsonify({"error": "Video not found"}), 404
+    return jsonify({"transcript": transcript_record.transcript_text})
+
+
+@app.route("/api/video/<video_id>/summaries")
+def get_summaries(video_id):
+    """API endpoint to fetch summaries on demand."""
+    transcript_record = Transcript.query.filter_by(video_id=video_id).first()
+    if not transcript_record:
+        return jsonify({"error": "Video not found"}), 404
+    summaries = [
+        {"type": s.summary_type, "content": s.content}
+        for s in transcript_record.summaries
+    ]
+    return jsonify({"summaries": summaries, "video_id": video_id})
 
 
 # ==== Template ====
@@ -425,11 +487,79 @@ TEMPLATE = """
                 setTimeout(() => btn.textContent = original, 1500);
             });
         }
-        function toggleTranscript(btn) {
-            const section = btn.nextElementSibling;
+
+        async function toggleTranscript(btn, videoId) {
+            const videoItem = btn.closest('.video-item');
+            const section = videoItem.querySelector('.transcript-section');
+            const content = section.querySelector('.transcript-content');
             const isHidden = section.style.display === 'none' || !section.style.display;
-            section.style.display = isHidden ? 'block' : 'none';
-            btn.textContent = isHidden ? 'Hide Transcript' : 'Show Transcript';
+
+            if (isHidden) {
+                if (!content.dataset.loaded) {
+                    content.textContent = 'Loading...';
+                    section.style.display = 'block';
+                    btn.textContent = 'Hide Transcript';
+                    try {
+                        const res = await fetch(`/api/video/${videoId}/transcript`);
+                        const data = await res.json();
+                        content.textContent = data.transcript || data.error;
+                        content.dataset.loaded = 'true';
+                    } catch (e) {
+                        content.textContent = 'Failed to load transcript.';
+                    }
+                } else {
+                    section.style.display = 'block';
+                    btn.textContent = 'Hide Transcript';
+                }
+            } else {
+                section.style.display = 'none';
+                btn.textContent = 'Show Transcript';
+            }
+        }
+
+        async function toggleSummaries(btn, videoId) {
+            const videoItem = btn.closest('.video-item');
+            const container = videoItem.querySelector('.summaries-container');
+            const isHidden = container.style.display === 'none' || !container.style.display;
+
+            if (isHidden) {
+                if (!container.dataset.loaded) {
+                    container.innerHTML = '<p>Loading summaries...</p>';
+                    container.style.display = 'block';
+                    btn.textContent = 'Hide Summaries';
+                    try {
+                        const res = await fetch(`/api/video/${videoId}/summaries`);
+                        const data = await res.json();
+                        if (data.summaries && data.summaries.length > 0) {
+                            container.innerHTML = data.summaries.map(s => `
+                                <div class="summary-section">
+                                    <div class="summary-header">
+                                        <div class="summary-type">${s.type.charAt(0).toUpperCase() + s.type.slice(1)} Summary:</div>
+                                        <div class="btn-group">
+                                            <button type="button" class="copy-btn" onclick="copyToClipboard(this)">Copy</button>
+                                            <form method="post" action="/summarize/${videoId}/${s.type}" style="margin: 0;">
+                                                <button type="submit" class="resummarize-btn">Resummarize</button>
+                                            </form>
+                                        </div>
+                                    </div>
+                                    <p class="summary-content">${s.content.replace(/\\n/g, '<br>')}</p>
+                                </div>
+                            `).join('');
+                        } else {
+                            container.innerHTML = '<p>No summaries available.</p>';
+                        }
+                        container.dataset.loaded = 'true';
+                    } catch (e) {
+                        container.innerHTML = '<p>Failed to load summaries.</p>';
+                    }
+                } else {
+                    container.style.display = 'block';
+                    btn.textContent = 'Hide Summaries';
+                }
+            } else {
+                container.style.display = 'none';
+                btn.textContent = 'Show Summaries';
+            }
         }
     </script>
 </head>
@@ -468,30 +598,18 @@ TEMPLATE = """
                     <div class="timestamp">
                         Processed: {{ video.created_at.strftime('%Y-%m-%d %H:%M:%S') }}
                     </div>
-                    <button type="button" class="transcript-toggle" onclick="toggleTranscript(this)">Show Transcript</button>
+                    <div class="btn-group" style="margin-bottom: 0.5rem;">
+                        <button type="button" class="transcript-toggle" onclick="toggleTranscript(this, '{{ video.video_id }}')">Show Transcript</button>
+                        <button type="button" class="transcript-toggle" onclick="toggleSummaries(this, '{{ video.video_id }}')">Show Summaries</button>
+                    </div>
                     <div class="transcript-section">
                         <div class="transcript-header">
                             <span class="transcript-label">Transcript:</span>
                             <button type="button" class="copy-btn" onclick="copyToClipboard(this)">Copy</button>
                         </div>
-                        <div class="transcript-content">{{ video.transcript_text }}</div>
+                        <div class="transcript-content"></div>
                     </div>
-                    {% if video.summaries %}
-                        {% for summary in video.summaries %}
-                            <div class="summary-section">
-                                <div class="summary-header">
-                                    <div class="summary-type">{{ summary.summary_type|title }} Summary:</div>
-                                    <div class="btn-group">
-                                        <button type="button" class="copy-btn" onclick="copyToClipboard(this)">Copy</button>
-                                        <form method="post" action="/summarize/{{ video.video_id }}/{{ summary.summary_type }}" style="margin: 0;">
-                                            <button type="submit" class="resummarize-btn">Resummarize</button>
-                                        </form>
-                                    </div>
-                                </div>
-                                <p class="summary-content">{{ summary.content | replace('\n', '<br>') | safe }}</p>
-                            </div>
-                        {% endfor %}
-                    {% endif %}
+                    <div class="summaries-container" style="display: none;"></div>
                 </div>
             {% endfor %}
         {% else %}
