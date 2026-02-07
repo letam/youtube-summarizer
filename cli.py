@@ -153,8 +153,8 @@ def list_processed_videos(limit: int = 10, source_type: str = None) -> None:
             else:
                 print_colored(f"{i}. [Audio] {item.original_filename}", "white")
                 print_colored(f"   Source ID: {item.source_id}", "blue")
-                if item.audio_duration_seconds:
-                    mins, secs = divmod(item.audio_duration_seconds, 60)
+                if item.source_duration:
+                    mins, secs = divmod(item.source_duration, 60)
                     print_colored(f"   Duration: {mins}m {secs}s", "blue")
 
             print_colored(
@@ -177,8 +177,8 @@ def format_audio_output(transcript_record, summaries: dict = None) -> None:
     print_colored(f"\n{'='*60}", "cyan")
     print_colored(f"Audio File: {transcript_record.original_filename}", "bold")
     print_colored(f"Source ID: {transcript_record.source_id}", "blue")
-    if transcript_record.audio_duration_seconds:
-        mins, secs = divmod(transcript_record.audio_duration_seconds, 60)
+    if transcript_record.source_duration:
+        mins, secs = divmod(transcript_record.source_duration, 60)
         print_colored(f"Duration: {mins}m {secs}s", "blue")
     print_colored(f"{'='*60}\n", "cyan")
 
@@ -260,7 +260,7 @@ def process_audio(file_path: str, summarize: bool = False, verbose: bool = False
                 transcript_text=result["text"],
                 original_filename=filename,
                 file_path=save_path,
-                audio_duration_seconds=int(result["duration"]) if result.get("duration") else None,
+                source_duration=int(result["duration"]) if result.get("duration") else None,
             )
             db.session.add(transcript)
             db.session.commit()

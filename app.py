@@ -168,7 +168,7 @@ def process_audio_upload(uploaded_file):
             transcript_text=result["text"],
             original_filename=original_filename,
             file_path=file_path,
-            audio_duration_seconds=int(result["duration"]) if result.get("duration") else None,
+            source_duration=int(result["duration"]) if result.get("duration") else None,
         )
         db.session.add(transcript)
         db.session.commit()
@@ -572,7 +572,7 @@ def api_audio_transcribe():
             "source_id": transcript.source_id,
             "transcript": transcript.transcript_text,
             "original_filename": transcript.original_filename,
-            "duration_seconds": transcript.audio_duration_seconds,
+            "source_duration": transcript.source_duration,
             "created_at": transcript.created_at.strftime("%Y-%m-%d %H:%M:%S"),
         })
     except ValueError as e:
@@ -624,7 +624,7 @@ def api_audio_get_transcript(source_id):
         "source_id": source_id,
         "original_filename": transcript_record.original_filename,
         "transcript": transcript_record.transcript_text,
-        "duration_seconds": transcript_record.audio_duration_seconds,
+        "source_duration": transcript_record.source_duration,
     })
 
 
@@ -663,7 +663,7 @@ def api_audio_list():
             {
                 "source_id": t.source_id,
                 "original_filename": t.original_filename,
-                "duration_seconds": t.audio_duration_seconds,
+                "source_duration": t.source_duration,
                 "created_at": t.created_at.strftime("%Y-%m-%d %H:%M:%S"),
                 "has_summaries": len(t.summaries) > 0,
             }

@@ -13,7 +13,7 @@ class Transcript(db.Model):
     generated_title = db.Column(db.String(200), nullable=True)
     original_filename = db.Column(db.String(255), nullable=True)
     file_path = db.Column(db.String(500), nullable=True)
-    audio_duration_seconds = db.Column(db.Integer, nullable=True)
+    source_duration = db.Column(db.Integer, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(
         db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
