@@ -41,6 +41,18 @@ just clean            # Remove cache files
 - `openai` SDK using `client.responses.create()` method
 - Flask-SQLAlchemy for persistence
 
+## Database Migrations
+
+This project uses Flask-Migrate (Alembic) for schema changes. Migration files live in `migrations/versions/`.
+
+```bash
+FLASK_APP=app.py ./venv/bin/flask db upgrade   # Apply pending migrations
+FLASK_APP=app.py ./venv/bin/flask db downgrade  # Revert last migration
+FLASK_APP=app.py ./venv/bin/flask db migrate -m "description"  # Generate new migration
+```
+
+**Troubleshooting:** If the app crashes with `OperationalError: no such column`, there are unapplied migrations. Run `flask db upgrade` to fix.
+
 ## Configuration
 
 - Environment: Copy `.env.example` to `.env` and set `OPENAI_API_KEY`
