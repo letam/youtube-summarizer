@@ -1,6 +1,7 @@
 import hashlib
 import os
 import re
+import time
 from datetime import datetime
 from typing import List
 
@@ -305,11 +306,16 @@ def calculate_max_tokens(text: str, summary_type: str, is_final: bool = False) -
     return max(min_bound, min(int(input_tokens * percentage), max_bound))
 
 
-def generate_summary(text: str, summary_type: str) -> str:
-    """Generate a single type of summary for the given text."""
+def generate_summary(text: str, summary_type: str) -> tuple[str, float]:
+    """Generate a single type of summary for the given text.
+
+    Returns:
+        Tuple of (summary_content, generation_duration)
+    """
     if summary_type not in SUMMARY_INSTRUCTIONS:
         raise ValueError(f"Invalid summary type: {summary_type}")
 
+    start_time = time.monotonic()
     chunks = chunk_transcript(text)
     instruction = SUMMARY_INSTRUCTIONS[summary_type]
 
@@ -328,7 +334,8 @@ def generate_summary(text: str, summary_type: str) -> str:
             app.logger.debug(
                 f"[{summary_type}] final: {actual}/{max_tokens} tokens used"
             )
-        return response.output_text
+        duration = time.monotonic() - start_time
+        return response.output_text, round(duration, 2)
 
     # Multiple chunks - summarize each, then combine
     chunk_summaries = []
@@ -360,15 +367,21 @@ def generate_summary(text: str, summary_type: str) -> str:
     if app.debug:
         actual = response.usage.output_tokens
         app.logger.debug(f"[{summary_type}] final: {actual}/{max_tokens} tokens used")
-    return response.output_text
+    duration = time.monotonic() - start_time
+    return response.output_text, round(duration, 2)
 
 
 def summarize_transcript(text):
-    """Generate all summary types for the given text."""
-    return {
-        summary_type: generate_summary(text, summary_type)
-        for summary_type in SUMMARY_INSTRUCTIONS
-    }
+    """Generate all summary types for the given text.
+
+    Returns:
+        Dict of {summary_type: {"content": str, "generation_duration": float}}
+    """
+    results = {}
+    for summary_type in SUMMARY_INSTRUCTIONS:
+        content, duration = generate_summary(text, summary_type)
+        results[summary_type] = {"content": content, "generation_duration": duration}
+    return results
 
 
 # ==== Routes ====
@@ -397,11 +410,12 @@ def index():
                     # Delete existing summaries
                     Summary.query.filter_by(transcript_id=transcript_record.id).delete()
                     # Add new summaries
-                    for summary_type, content in summaries.items():
+                    for summary_type, result in summaries.items():
                         new_summary = Summary(
                             transcript_id=transcript_record.id,
                             summary_type=summary_type,
-                            content=content,
+                            content=result["content"],
+                            generation_duration=result["generation_duration"],
                         )
                         db.session.add(new_summary)
                     db.session.commit()
@@ -430,18 +444,20 @@ def summarize(video_id, summary_type):
     elif summary_type not in SUMMARY_INSTRUCTIONS:
         error = "Invalid summary type."
     else:
-        new_content = generate_summary(transcript_record.transcript_text, summary_type)
+        new_content, duration = generate_summary(transcript_record.transcript_text, summary_type)
         # Update or create the summary
         existing_summary = Summary.query.filter_by(
             transcript_id=transcript_record.id, summary_type=summary_type
         ).first()
         if existing_summary:
             existing_summary.content = new_content
+            existing_summary.generation_duration = duration
         else:
             new_summary = Summary(
                 transcript_id=transcript_record.id,
                 summary_type=summary_type,
                 content=new_content,
+                generation_duration=duration,
             )
             db.session.add(new_summary)
         db.session.commit()
@@ -480,11 +496,12 @@ def api_summarize():
     ).first()
     if transcript_record:
         Summary.query.filter_by(transcript_id=transcript_record.id).delete()
-        for summary_type, content in summaries.items():
+        for summary_type, result in summaries.items():
             new_summary = Summary(
                 transcript_id=transcript_record.id,
                 summary_type=summary_type,
-                content=content,
+                content=result["content"],
+                generation_duration=result["generation_duration"],
             )
             db.session.add(new_summary)
         db.session.commit()
@@ -493,7 +510,10 @@ def api_summarize():
         {
             "video_id": video_id,
             "timestamp": transcript_record.created_at.strftime("%Y-%m-%d %H:%M:%S"),
-            "summaries": [{"type": k, "content": v} for k, v in summaries.items()],
+            "summaries": [
+                {"type": k, "content": v["content"], "generation_duration": v["generation_duration"]}
+                for k, v in summaries.items()
+            ],
         }
     )
 
@@ -510,23 +530,25 @@ def api_resummarize(video_id, summary_type):
     if summary_type not in SUMMARY_INSTRUCTIONS:
         return jsonify({"error": "Invalid summary type."}), 400
 
-    new_content = generate_summary(transcript_record.transcript_text, summary_type)
+    new_content, duration = generate_summary(transcript_record.transcript_text, summary_type)
 
     existing_summary = Summary.query.filter_by(
         transcript_id=transcript_record.id, summary_type=summary_type
     ).first()
     if existing_summary:
         existing_summary.content = new_content
+        existing_summary.generation_duration = duration
     else:
         new_summary = Summary(
             transcript_id=transcript_record.id,
             summary_type=summary_type,
             content=new_content,
+            generation_duration=duration,
         )
         db.session.add(new_summary)
     db.session.commit()
 
-    return jsonify({"type": summary_type, "content": new_content})
+    return jsonify({"type": summary_type, "content": new_content, "generation_duration": duration})
 
 
 @app.route("/api/video/<video_id>/transcript")
@@ -549,7 +571,7 @@ def get_summaries(video_id):
     if not transcript_record:
         return jsonify({"error": "Video not found"}), 404
     summaries = [
-        {"type": s.summary_type, "content": s.content}
+        {"type": s.summary_type, "content": s.content, "generation_duration": s.generation_duration}
         for s in transcript_record.summaries
     ]
     return jsonify({"summaries": summaries, "video_id": video_id})
@@ -595,18 +617,22 @@ def api_audio_summarize(source_id):
 
     # Update summaries in database
     Summary.query.filter_by(transcript_id=transcript_record.id).delete()
-    for summary_type, content in summaries.items():
+    for summary_type, result in summaries.items():
         new_summary = Summary(
             transcript_id=transcript_record.id,
             summary_type=summary_type,
-            content=content,
+            content=result["content"],
+            generation_duration=result["generation_duration"],
         )
         db.session.add(new_summary)
     db.session.commit()
 
     return jsonify({
         "source_id": source_id,
-        "summaries": [{"type": k, "content": v} for k, v in summaries.items()],
+        "summaries": [
+            {"type": k, "content": v["content"], "generation_duration": v["generation_duration"]}
+            for k, v in summaries.items()
+        ],
     })
 
 
@@ -639,7 +665,7 @@ def api_audio_get_summaries(source_id):
         return jsonify({"error": "Audio transcript not found"}), 404
 
     summaries = [
-        {"type": s.summary_type, "content": s.content}
+        {"type": s.summary_type, "content": s.content, "generation_duration": s.generation_duration}
         for s in transcript_record.summaries
     ]
     return jsonify({"summaries": summaries, "source_id": source_id})

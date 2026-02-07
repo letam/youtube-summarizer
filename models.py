@@ -35,6 +35,7 @@ class Summary(db.Model):
         db.String(50), nullable=False
     )  # e.g., 'concise', 'detailed', 'key_points'
     content = db.Column(db.Text, nullable=False)
+    generation_duration = db.Column(db.Float, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(
         db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow

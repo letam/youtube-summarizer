@@ -107,11 +107,17 @@ def format_summary_output(summaries: dict, video_id: str) -> None:
 
     for summary_type, (icon, color) in summary_types.items():
         if summary_type in summaries:
-            print_colored(f"{icon} {summary_type.upper()} SUMMARY", color)
+            result = summaries[summary_type]
+            content = result["content"]
+            duration = result.get("generation_duration")
+
+            header = f"{icon} {summary_type.upper()} SUMMARY"
+            if duration is not None:
+                header += f" ({duration:.1f}s)"
+            print_colored(header, color)
             print_colored("-" * 40, "white")
 
             # Wrap text for better readability
-            content = summaries[summary_type]
             lines = content.split("\n")
             for line in lines:
                 if line.strip():
@@ -191,10 +197,16 @@ def format_audio_output(transcript_record, summaries: dict = None) -> None:
 
         for summary_type, (icon, color) in summary_types.items():
             if summary_type in summaries:
-                print_colored(f"{icon} {summary_type.upper()} SUMMARY", color)
+                result = summaries[summary_type]
+                content = result["content"]
+                duration = result.get("generation_duration")
+
+                header = f"{icon} {summary_type.upper()} SUMMARY"
+                if duration is not None:
+                    header += f" ({duration:.1f}s)"
+                print_colored(header, color)
                 print_colored("-" * 40, "white")
 
-                content = summaries[summary_type]
                 lines = content.split("\n")
                 for line in lines:
                     if line.strip():
@@ -295,11 +307,12 @@ def process_audio(file_path: str, summarize: bool = False, verbose: bool = False
             # Save summaries to database
             def _save_summaries():
                 from models import Summary
-                for summary_type, content in summaries.items():
+                for summary_type, result in summaries.items():
                     new_summary = Summary(
                         transcript_id=transcript_record.id,
                         summary_type=summary_type,
-                        content=content,
+                        content=result["content"],
+                        generation_duration=result["generation_duration"],
                     )
                     db.session.add(new_summary)
                 db.session.commit()
